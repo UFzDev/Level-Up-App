@@ -1,6 +1,7 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { chatWithChef } from '../services/geminiService';
-import { getPantry, getUserRecipes, getRecentHistoryAsString, logMeal, getDailyScore, getStreak } from '../services/storageService';
+import { getPantry, getUserRecipes, getRecentHistoryAsString, logMeal, getDailyScore, getStreak, saveChatHistory, loadChatHistory } from '../services/storageService';
 import { Message, StructuredRecipe } from '../types';
 import ReactMarkdown from 'react-markdown';
 
@@ -85,14 +86,15 @@ const RecipeCard: React.FC<{ data: StructuredRecipe, onCook: () => void }> = ({ 
 const Chatbot: React.FC = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    {
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const saved = loadChatHistory();
+    return saved.length > 0 ? saved : [{
       id: 'welcome',
       role: 'model',
       text: '¡Hola! Soy tu Chef. ¿Qué se te antoja hoy?',
       timestamp: Date.now(),
-    }
-  ]);
+    }];
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -101,6 +103,11 @@ const Chatbot: React.FC = () => {
 
   useEffect(() => {
     scrollToBottom();
+  }, [messages]);
+
+  // Auto-save messages whenever they change
+  useEffect(() => {
+    saveChatHistory(messages);
   }, [messages]);
 
   const handleSend = async () => {

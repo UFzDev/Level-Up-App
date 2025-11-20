@@ -4,8 +4,9 @@ const RECIPES_KEY = 'nutri-flex-recipes';
 const HISTORY_KEY = 'nutri-flex-history';
 const WATER_KEY = 'nutri-flex-water';
 const WATER_HISTORY_KEY = 'nutri-flex-water-history'; // Map<DateString, Count>
+const CHAT_HISTORY_KEY = 'nutri-flex-chat-history';
 
-import { UserRecipe, MealLog, ExerciseLog, Intensity, HistoryItem, WaterData, Streaks, DailyBreakdown, WeeklyStatsData } from '../types';
+import { UserRecipe, MealLog, ExerciseLog, Intensity, HistoryItem, WaterData, Streaks, DailyBreakdown, WeeklyStatsData, Message } from '../types';
 
 // --- PANTRY ---
 
@@ -139,6 +140,26 @@ export const updateWater = (delta: number): WaterData => {
   localStorage.setItem(WATER_HISTORY_KEY, JSON.stringify(history));
 
   return newData;
+};
+
+// --- CHAT HISTORY PERSISTENCE ---
+
+export const saveChatHistory = (messages: Message[]) => {
+  try {
+    localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages));
+  } catch (e) {
+    console.error("Error saving chat history", e);
+  }
+};
+
+export const loadChatHistory = (): Message[] => {
+  try {
+    const stored = localStorage.getItem(CHAT_HISTORY_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.error("Error loading chat history", e);
+    return [];
+  }
 };
 
 // --- LOGGING HELPERS ---
@@ -417,6 +438,7 @@ export const exportFullData = () => {
         history: localStorage.getItem(HISTORY_KEY),
         water: localStorage.getItem(WATER_KEY),
         waterHistory: localStorage.getItem(WATER_HISTORY_KEY),
+        chatHistory: localStorage.getItem(CHAT_HISTORY_KEY),
         meta: {
             timestamp: Date.now(),
             version: '11.0'
@@ -432,6 +454,7 @@ export const importFullData = (jsonData: any): boolean => {
         if (jsonData.history) localStorage.setItem(HISTORY_KEY, jsonData.history);
         if (jsonData.water) localStorage.setItem(WATER_KEY, jsonData.water);
         if (jsonData.waterHistory) localStorage.setItem(WATER_HISTORY_KEY, jsonData.waterHistory);
+        if (jsonData.chatHistory) localStorage.setItem(CHAT_HISTORY_KEY, jsonData.chatHistory);
         return true;
     } catch (e) {
         console.error("Error restoring backup", e);
