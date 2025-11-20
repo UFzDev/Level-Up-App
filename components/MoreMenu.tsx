@@ -97,9 +97,11 @@ const MoreMenu: React.FC<MoreMenuProps> = ({ onNavigate }) => {
 
   return (
     <div className="p-4 space-y-6 pb-24 animate-fadeIn">
-      <div className="bg-white border-b border-gray-100 pb-4 mb-4">
-        <h2 className="text-2xl font-bold text-gray-800">Menú</h2>
-        <p className="text-gray-500 text-sm">Más herramientas para tu bienestar.</p>
+      <div className="bg-white border-b border-gray-100 pb-4 mb-4 flex justify-between items-center">
+        <div>
+            <h2 className="text-2xl font-bold text-gray-800">Menú</h2>
+            <p className="text-gray-500 text-sm">Más herramientas para tu bienestar.</p>
+        </div>
       </div>
 
       <div className="grid gap-4">
