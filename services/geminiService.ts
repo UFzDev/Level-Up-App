@@ -44,39 +44,82 @@ export const chatWithChef = async (
   try {
     const { pantry, recipes, historyString, score, streak } = contextData;
 
-    // --- Contexto ---
-    const systemText = `
-    Eres 'Level Up Coach', experto en nutrición y fitness.
-    Regla de Oro: 80/20 (Flexible).
+// --- NUEVO: LÓGICA DE CONTEXTO DE 48 HORAS Y PERFIL ATLÉTICO ---
+    const twoDaysAgo = Date.now() - (48 * 60 * 60 * 1000);
+    const allUnifiedHistory = getUnifiedHistory(); // Asumo que esta función trae Comidas y Ejercicios
     
-    [ESTADO DEL JUGADOR]:
-    - Score Nutrición: ${score} | Racha: ${streak} días.
-    
-    [INVENTARIO]:
-    - Despensa: ${pantry.join(', ') || "Vacía"}.
-    - Recetas guardadas: ${recipes.map((r:any) => r.title).join(', ') || "Ninguna"}.
-    
-    [HISTORIAL RECIENTE]:
-    ${historyString}
+    // Filtramos los ítems consumidos/registrados en las últimas 48 horas
+    const recentItems = allUnifiedHistory.filter((item: any) => {
+        // Usamos el timestamp como base para la hora del registro
+        return item.timestamp > twoDaysAgo;
+    });
 
-    [INSTRUCCIONES DE RESPUESTA]:
+    const calculatedHistoryString = recentItems.length > 0 
+        ? recentItems.map((h: any) => {
+            const dateStr = new Date(h.timestamp).toLocaleDateString('es-ES', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+            if (h.type === 'exercise') {
+                return `- [EJERCICIO ${dateStr}] 🏃 ${h.name} (${h.duration}min, ${h.caloriesBurned}kcal)`;
+            } else {
+                const status = h.status === 'completed' ? '✅' : '⏳';
+                const notes = h.userNotes ? `(Notas: ${h.userNotes})` : '';
+                return `- [COMIDA ${dateStr}] ${status} ${h.title} (${h.calories} kcal) ${notes}`;
+            }
+        }).join('\n')
+        : "No hay actividad registrada en las últimas 48 horas.";
+
+    // --- LÓGICA DE PERFIL ATLÉTICO (14 días) ---
+    const twoWeeksAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
+    const longTermExercises = allUnifiedHistory.filter((h: any) => h.type === 'exercise' && h.timestamp > twoWeeksAgo);
+    const isAthletic = longTermExercises.length >= 6;
+    
+    const profilePrompt = isAthletic 
+        ? "PERFIL DETECTADO: Usuario Atlético/Activo. Aumentar ligeramente las porciones."
+        : "PERFIL DETECTADO: Sedentario/Moderado. Mantener porciones estándar.";
+    
+    // --- CONTEXTO DE EJERCICIO INMEDIATO (Hoy) ---
+    const exercises = getTodayExercises();
+    let exercisePrompt = "Sin ejercicio registrado hoy.";
+    if (exercises.length > 0) {
+        const lastExercise = exercises[exercises.length - 1];
+        exercisePrompt = `[EVENTO RECIENTE]: Ejercicio a las ${lastExercise.time} - Tiempo de recuperación crítico.`;
+    }
+
+    // --- System Instruction (Reglas para la IA) ---
+    const recipeList = recipes.map((r: any) => r.title).join('; ');
+    
+    const systemText = `
+    Eres 'Mi Asistente Nutri-Flex', un coach amable y motivador (Regla 80/20).
+    
+    [DATOS DEL JUGADOR]:
+    - Puntaje Hoy: ${score} | Racha: ${streak} días.
+    - ${profilePrompt}
+    - ${exercisePrompt}
+
+    [CONTEXTO ACTUAL]:
+    1. INVENTARIO: ${pantry.join(', ')}.
+    2. RECETAS PROPIAS: ${recipeList || "Ninguna"}.
+    3. HISTORIAL RECIENTE (Últimas 48h):
+    ${calculatedHistoryString}
+
+    [REGLAS]:
     1. Sé breve, motivador y usa emojis.
-    2. Si sugieres una receta, verifica si el usuario tiene los ingredientes.
-    3. IMPORTANTE: Si el usuario pide una receta específica, al final de tu respuesta INCLUYE SIEMPRE un bloque JSON estrictamente con este formato para mostrar la tarjeta bonita:
+    2. Si sugieres una receta, verifica si los ingredientes son del inventario. Si faltan, ponlos como "[Compra Rápida]".
+    3. Si das una receta completa, INCLUYE SIEMPRE este JSON al final:
     
     \`\`\`json
     {
       "type": "recipe_card",
-      "title": "Nombre del Plato",
+      "title": "Nombre Receta",
       "time": "XX min",
-      "ingredients": ["Ingrediente 1", "Ingrediente 2"],
+      "ingredients": ["ingrediente 1", "ingrediente 2 [Compra Rápida]"],
       "instructions": ["Paso 1", "Paso 2"],
       "macros": { "calories": "0", "protein": "0g", "carbs": "0g", "fats": "0g" }
     }
     \`\`\`
     `;
+    // --- Fin System Instruction ---
 
-    // --- Limpieza de historial (Regla: User First) ---
+    // --- Limpieza de historial y Envío a Chat ---
     let cleanHistory = history.map(h => ({
       role: h.role === 'user' ? 'user' : 'model',
       parts: [{ text: h.parts[0].text }]
@@ -95,8 +138,8 @@ export const chatWithChef = async (
     return result.response.text();
 
   } catch (error) {
-    console.error("Error chat:", error);
-    return "Tu entrenador está descansando (Límite de cuota o error de red).";
+    console.error("Error en chat (FATAL):", error);
+    return "Error de conexión o datos. Asegúrate de que tu llave API sea válida.";
   }
 };
 
