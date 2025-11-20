@@ -1,0 +1,8 @@
+{
+  "name": "Mi Asistente Nutri-Flex",
+  "description": "Tu coach de nutrición amable y flexible. Planificación de comidas, chat inteligente y análisis de refrigerador con IA.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
