@@ -6,7 +6,14 @@ const WATER_KEY = 'nutri-flex-water';
 const WATER_HISTORY_KEY = 'nutri-flex-water-history'; // Map<DateString, Count>
 const CHAT_HISTORY_KEY = 'nutri-flex-chat-history';
 
-import { UserRecipe, MealLog, ExerciseLog, Intensity, HistoryItem, WaterData, Streaks, DailyBreakdown, WeeklyStatsData, Message } from '../types';
+// V12 Keys
+const SETTINGS_KEY = 'nutri-flex-settings';
+const SLEEP_KEY = 'nutri-flex-sleep'; // Map<DateString, number>
+const STEPS_KEY = 'nutri-flex-steps'; // Map<DateString, number>
+const HABITS_KEY = 'nutri-flex-habits'; // Habit[]
+const HABITS_LOG_KEY = 'nutri-flex-habits-log'; // HabitLog[]
+
+import { UserRecipe, MealLog, ExerciseLog, Intensity, HistoryItem, WaterData, Streaks, DailyBreakdown, WeeklyStatsData, Message, WellnessSettings, Habit, HabitLog } from '../types';
 
 // --- PANTRY ---
 
@@ -268,6 +275,92 @@ export const getRecentHistoryAsString = (hours: number = 48): string => {
     }).join('\n');
 };
 
+// --- V12 WELLNESS MODULES ---
+
+export const getWellnessSettings = (): WellnessSettings => {
+    try {
+        const stored = localStorage.getItem(SETTINGS_KEY);
+        return stored ? JSON.parse(stored) : { enableSleep: false, enableSteps: false, enableHabits: false };
+    } catch {
+        return { enableSleep: false, enableSteps: false, enableHabits: false };
+    }
+};
+
+export const saveWellnessSettings = (settings: WellnessSettings) => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+};
+
+// Sleep
+export const logSleep = (hours: number) => {
+    const today = getTodayDateString();
+    const stored = localStorage.getItem(SLEEP_KEY);
+    const map = stored ? JSON.parse(stored) : {};
+    map[today] = hours;
+    localStorage.setItem(SLEEP_KEY, JSON.stringify(map));
+};
+
+export const getTodaySleep = (): number | null => {
+    const today = getTodayDateString();
+    const stored = localStorage.getItem(SLEEP_KEY);
+    const map = stored ? JSON.parse(stored) : {};
+    return map[today] || null;
+};
+
+// Steps
+export const logSteps = (count: number) => {
+    const today = getTodayDateString();
+    const stored = localStorage.getItem(STEPS_KEY);
+    const map = stored ? JSON.parse(stored) : {};
+    map[today] = count;
+    localStorage.setItem(STEPS_KEY, JSON.stringify(map));
+};
+
+export const getTodaySteps = (): number => {
+    const today = getTodayDateString();
+    const stored = localStorage.getItem(STEPS_KEY);
+    const map = stored ? JSON.parse(stored) : {};
+    return map[today] || 0;
+};
+
+// Habits
+export const getHabits = (): Habit[] => {
+    const stored = localStorage.getItem(HABITS_KEY);
+    return stored ? JSON.parse(stored) : [];
+};
+
+export const addHabit = (title: string) => {
+    const habits = getHabits();
+    const newHabit: Habit = { id: Date.now().toString(), title };
+    localStorage.setItem(HABITS_KEY, JSON.stringify([...habits, newHabit]));
+};
+
+export const deleteHabit = (id: string) => {
+    const habits = getHabits();
+    localStorage.setItem(HABITS_KEY, JSON.stringify(habits.filter(h => h.id !== id)));
+};
+
+export const toggleHabitForToday = (habitId: string) => {
+    const today = getTodayDateString();
+    const stored = localStorage.getItem(HABITS_LOG_KEY);
+    let logs: HabitLog[] = stored ? JSON.parse(stored) : [];
+    
+    const exists = logs.find(l => l.date === today && l.habitId === habitId);
+    if (exists) {
+        logs = logs.filter(l => !(l.date === today && l.habitId === habitId));
+    } else {
+        logs.push({ date: today, habitId });
+    }
+    localStorage.setItem(HABITS_LOG_KEY, JSON.stringify(logs));
+    return !exists; // returns true if checked, false if unchecked
+};
+
+export const getTodayHabitLogs = (): string[] => { // returns habit IDs
+    const today = getTodayDateString();
+    const stored = localStorage.getItem(HABITS_LOG_KEY);
+    const logs: HabitLog[] = stored ? JSON.parse(stored) : [];
+    return logs.filter(l => l.date === today).map(l => l.habitId);
+};
+
 // --- V11 GAMIFICATION LOGIC ---
 
 export const getDailyBreakdown = (): DailyBreakdown => {
@@ -325,8 +418,9 @@ export const getDailyScore = (): number => {
 export const getStreaks = (): Streaks => {
     const history = getUnifiedHistory();
     const waterHistory = getWaterHistory();
-    const todayStr = getTodayDateString();
-    
+    const storedHabitLogs = localStorage.getItem(HABITS_LOG_KEY);
+    const habitLogs: HabitLog[] = storedHabitLogs ? JSON.parse(storedHabitLogs) : [];
+
     const getStreakFor = (predicate: (dStr: string) => boolean): number => {
         let streak = 0;
         const d = new Date();
@@ -335,7 +429,6 @@ export const getStreaks = (): Streaks => {
         // Check today first
         const tStr = getTodayDateString(d);
         if (predicate(tStr)) {
-             // If we have activity today, count it and check yesterday
              streak = 1;
         }
         
@@ -348,7 +441,6 @@ export const getStreaks = (): Streaks => {
                 d.setDate(d.getDate() - 1);
             } else {
                 if (streak === 0) {
-                     // Today was empty, check yesterday
                      const yesterdayStr = getTodayDateString(d);
                      if (predicate(yesterdayStr)) {
                          streak = 1;
@@ -378,10 +470,15 @@ export const getStreaks = (): Streaks => {
          return (waterHistory[dateStr] || 0) > 0;
     });
 
+    const habitStreak = getStreakFor((dateStr) => {
+        return habitLogs.some(l => l.date === dateStr);
+    });
+
     return {
         nutrition: nutritionStreak,
         exercise: exerciseStreak,
-        hydration: hydrationStreak
+        hydration: hydrationStreak,
+        habits: habitStreak
     };
 };
 
@@ -429,6 +526,39 @@ export const getWeeklyDetailedStats = (): WeeklyStatsData[] => {
     return days;
 };
 
+// --- V13 WELLNESS HISTORY LOGIC ---
+export const getWeeklyWellnessHistory = () => {
+    const sleepStore = localStorage.getItem(SLEEP_KEY);
+    const sleepMap: Record<string, number> = sleepStore ? JSON.parse(sleepStore) : {};
+
+    const stepsStore = localStorage.getItem(STEPS_KEY);
+    const stepsMap: Record<string, number> = stepsStore ? JSON.parse(stepsStore) : {};
+
+    const logsStore = localStorage.getItem(HABITS_LOG_KEY);
+    const habitLogs: HabitLog[] = logsStore ? JSON.parse(logsStore) : [];
+
+    const history = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = getTodayDateString(d);
+        const dayName = d.toLocaleDateString('es-ES', { weekday: 'short' });
+
+        // Count habits for this date
+        const habitsCount = habitLogs.filter(l => l.date === dateStr).length;
+
+        history.push({
+            date: dateStr,
+            dayName: dayName.charAt(0).toUpperCase() + dayName.slice(1),
+            sleep: sleepMap[dateStr] || 0,
+            steps: stepsMap[dateStr] || 0,
+            completedHabits: habitsCount
+        });
+    }
+    return history;
+};
+
+
 // --- BACKUP & RESTORE ---
 
 export const exportFullData = () => {
@@ -439,9 +569,14 @@ export const exportFullData = () => {
         water: localStorage.getItem(WATER_KEY),
         waterHistory: localStorage.getItem(WATER_HISTORY_KEY),
         chatHistory: localStorage.getItem(CHAT_HISTORY_KEY),
+        settings: localStorage.getItem(SETTINGS_KEY),
+        sleep: localStorage.getItem(SLEEP_KEY),
+        steps: localStorage.getItem(STEPS_KEY),
+        habits: localStorage.getItem(HABITS_KEY),
+        habitLogs: localStorage.getItem(HABITS_LOG_KEY),
         meta: {
             timestamp: Date.now(),
-            version: '11.0'
+            version: '12.0'
         }
     };
 };
@@ -455,11 +590,35 @@ export const importFullData = (jsonData: any): boolean => {
         if (jsonData.water) localStorage.setItem(WATER_KEY, jsonData.water);
         if (jsonData.waterHistory) localStorage.setItem(WATER_HISTORY_KEY, jsonData.waterHistory);
         if (jsonData.chatHistory) localStorage.setItem(CHAT_HISTORY_KEY, jsonData.chatHistory);
+        
+        // V12 Restore
+        if (jsonData.settings) localStorage.setItem(SETTINGS_KEY, jsonData.settings);
+        if (jsonData.sleep) localStorage.setItem(SLEEP_KEY, jsonData.sleep);
+        if (jsonData.steps) localStorage.setItem(STEPS_KEY, jsonData.steps);
+        if (jsonData.habits) localStorage.setItem(HABITS_KEY, jsonData.habits);
+        if (jsonData.habitLogs) localStorage.setItem(HABITS_LOG_KEY, jsonData.habitLogs);
+        
         return true;
     } catch (e) {
         console.error("Error restoring backup", e);
         return false;
     }
+};
+
+export const getLastNightSleepHours = (): number | null => {
+    try {
+        const d = new Date();
+        d.setDate(d.getDate() - 1); // Ayer
+        const year = d.getFullYear();
+        const month = d.getMonth() + 1; // getMonth es 0-indexado
+        const day = d.getDate();
+        // Asegura formato "YYYY-M-D" que usas en logSleep
+        const yesterdayStr = `${year}-${month}-${day}`; 
+        
+        const stored = localStorage.getItem('nutri-flex-sleep'); // Usa tu clave SLEEP_KEY
+        const map = stored ? JSON.parse(stored) : {};
+        return map[yesterdayStr] || null;
+    } catch { return null; }
 };
 
 export const getStreak = (): number => getStreaks().nutrition; 

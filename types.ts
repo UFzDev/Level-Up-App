@@ -9,7 +9,8 @@ export enum AppTab {
   RECIPES = 'recipes',
   SCANNER = 'scanner',
   STATS = 'stats',
-  POINTS_GUIDE = 'points_guide'
+  POINTS_GUIDE = 'points_guide',
+  WELLNESS_SETTINGS = 'wellness_settings'
 }
 
 export interface Message {
@@ -112,6 +113,7 @@ export interface Streaks {
     nutrition: number;
     exercise: number;
     hydration: number;
+    habits: number; // V12
 }
 
 export interface MetricBreakdown {
@@ -133,4 +135,32 @@ export interface WeeklyStatsData {
     nutritionXP: number;
     exerciseMins: number;
     waterCups: number;
+}
+
+// --- V12 WELLNESS TYPES ---
+
+export interface WellnessSettings {
+    enableSleep: boolean;
+    enableSteps: boolean;
+    enableHabits: boolean;
+}
+
+export interface SleepLog {
+    date: string; // YYYY-MM-DD
+    hours: number;
+}
+
+export interface StepsLog {
+    date: string; // YYYY-MM-DD
+    count: number;
+}
+
+export interface Habit {
+    id: string;
+    title: string;
+}
+
+export interface HabitLog {
+    date: string; // YYYY-MM-DD
+    habitId: string;
 }

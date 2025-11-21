@@ -11,6 +11,7 @@ import History from './components/History';
 import MoreMenu from './components/MoreMenu';
 import Stats from './components/Stats';
 import PointsGuide from './components/PointsGuide';
+import WellnessSettingsComp from './components/WellnessSettings';
 import { AppTab } from './types';
 import { initializeGemini } from './services/geminiService';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -61,6 +62,8 @@ const App: React.FC = () => {
         return <Scanner />;
       case AppTab.POINTS_GUIDE:
         return <PointsGuide onBack={() => setActiveTab(AppTab.MENU)} />;
+      case AppTab.WELLNESS_SETTINGS:
+        return <WellnessSettingsComp />;
         
       default:
         return <Dashboard />;

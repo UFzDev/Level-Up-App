@@ -20,11 +20,20 @@ export const initializeGemini = (apiKey: string) => {
 
 // 1.2. Función auxiliar para obtener el modelo (usada por todas las demás funciones)
 const getModel = () => {
+  // Si no está inicializado, intentamos recuperarlo del localStorage automáticamente
   if (!genAIInstance) {
-    // Esto disparará la lógica de App.tsx para pedir la clave de nuevo
-    throw new Error("Gemini Client no inicializado. Por favor ingrese su API Key.");
+    const storedKey = localStorage.getItem('user_api_key');
+    if (storedKey) {
+      // ¡Auto-recuperación! 🚑
+      genAIInstance = new GoogleGenerativeAI(storedKey);
+      console.log("🔄 Gemini recuperado automáticamente desde almacenamiento.");
+    } else {
+      // Si de verdad no hay llave, entonces sí lanzamos el error
+      throw new Error("Gemini Client no inicializado. Clave no disponible.");
+    }
   }
-  // Todas las funciones llaman al modelo de forma segura
+  
+  // Ahora sí, regresamos el modelo
   return genAIInstance.getGenerativeModel({ model: MODEL_NAME });
 };
 
@@ -45,125 +54,137 @@ export const generateDailyPlan = async (): Promise<string> => {
 };
 
 export const chatWithChef = async (
-    history: { role: string; parts: { text: string }[] }[], 
-    message: string,
-    contextData: any
+  history: { role: string; parts: { text: string }[] }[], 
+  message: string,
+  contextData: any
 ) => {
-    try {
-        const model = getModel();
-        const { pantry, recipes, score, streak } = contextData;
+  try {
+    const model = getModel();
+    // 1. Extraemos TODOS los datos (incluyendo los nuevos de Bienestar)
+    const { pantry, recipes, score, streak, lastNightSleepHours, wellnessSettings } = contextData;
 
-        // --- LÓGICA DE TIEMPO Y FASES NUTRICIONALES ---
-        const currentTime = new Date();
-        const currentHour = currentTime.getHours();
-        const timeOfDay = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-        const today = new Date(currentTime.setHours(0, 0, 0, 0)).getTime();
+    // --- LÓGICA DE TIEMPO Y FASES NUTRICIONALES (TUYA, CONSERVADA) ---
+    const currentTime = new Date();
+    const currentHour = currentTime.getHours();
+    const timeOfDay = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    const todayStart = new Date(currentTime.setHours(0, 0, 0, 0)).getTime();
 
-        // Obtener el historial de hoy para verificar comidas completadas
-        const allUnifiedHistory = getUnifiedHistory(); 
-        const todayCompletedMeals = allUnifiedHistory.filter((item: any) => 
-            item.type === 'meal' && 
-            item.status === 'completed' && 
-            item.timestamp >= today
-        );
+    const allUnifiedHistory = getUnifiedHistory(); 
+    
+    // Filtramos comidas completadas HOY usando consumedAt si existe, o timestamp
+    const todayCompletedMeals = allUnifiedHistory.filter((item: any) => {
+        const t = item.consumedAt || item.timestamp;
+        return item.type === 'meal' && item.status === 'completed' && t >= todayStart;
+    });
 
-        let mealContext = "Fase Nutricional: ";
-        let missingMealPrompt = "";
-        
-        // Determinar si ya se registraron las comidas principales
-        const hasBreakfast = todayCompletedMeals.some((m: any) => new Date(m.timestamp).getHours() < 12);
-        const hasLunch = todayCompletedMeals.some((m: any) => new Date(m.timestamp).getHours() >= 12 && new Date(m.timestamp).getHours() < 17);
-        const hasDinner = todayCompletedMeals.some((m: any) => new Date(m.timestamp).getHours() >= 17);
+    let mealContext = "Fase Nutricional: ";
+    let missingMealPrompt = "";
+    
+    // Chequeo de comidas (Mejorado para usar timestamp real)
+    const hasBreakfast = todayCompletedMeals.some((m: any) => new Date(m.consumedAt || m.timestamp).getHours() < 12);
+    const hasLunch = todayCompletedMeals.some((m: any) => {
+        const h = new Date(m.consumedAt || m.timestamp).getHours();
+        return h >= 12 && h < 18;
+    });
+    const hasDinner = todayCompletedMeals.some((m: any) => new Date(m.consumedAt || m.timestamp).getHours() >= 18);
 
-        if (currentHour >= 5 && currentHour < 12) {
-            // Mañana (5:00 - 11:59)
-            mealContext += "MAÑANA (Desayuno/Media Mañana).";
-            if (!hasBreakfast && currentHour >= 8) {
-                missingMealPrompt = "¡CUIDADO! Aún no se ha registrado el DESAYUNO. **Prioriza recordar al usuario agregar su desayuno** o sugerir algo rápido y nutritivo.";
-            } else if (hasBreakfast && currentHour >= 11) {
-                missingMealPrompt = "Ya desayunó. Sugiere una MERIENDA o prepara el contexto para la COMIDA.";
-            }
-        } else if (currentHour >= 12 && currentHour < 17) {
-            // Mediodía (12:00 - 16:59)
-            mealContext += "MEDIODÍA (Comida/Almuerzo).";
-            if (!hasLunch && currentHour >= 13) {
-                missingMealPrompt = "¡CUIDADO! Aún no se ha registrado la COMIDA. **Prioriza recordar al usuario agregar su comida** o sugerir un PLATO FUERTE.";
-            } else if (hasLunch && currentHour >= 15) {
-                missingMealPrompt = "Ya comió. Sugiere un snack o postre ligero.";
-            }
-        } else if (currentHour >= 17 && currentHour < 22) {
-            // Tarde/Noche (17:00 - 21:59)
-            mealContext += "TARDE/NOCHE (Cena).";
-            if (!hasDinner && currentHour >= 19) {
-                missingMealPrompt = "¡CUIDADO! Aún no se ha registrado la CENA. **Prioriza recordar al usuario agregar su cena** o sugerir una cena ligera y rica en proteína.";
-            } else if (hasDinner) {
-                missingMealPrompt = "Ya cenó. Pregunta cómo le fue con su día o si necesita ayuda planificando mañana.";
-            }
-        } else {
-            // Tarde/Noche (22:00 - 04:59)
-            mealContext += "DESCANSO/VENTANA DE AYUNO. NO SUGERIR COMIDAS PESADAS.";
-            missingMealPrompt = "Promueve la hidratación o el descanso. Solo sugiera si el usuario lo pide explícitamente.";
-        }
-
-        const timeContextPrompt = `
-[CONTEXTO TEMPORAL]:
-- HORA ACTUAL: ${timeOfDay}
-- ${mealContext}
-- INSTRUCCIÓN DE LA HORA: ${missingMealPrompt}
-        `;
-
-
-        // --- LÓGICA DE CONTEXTO DE 48 HORAS (Mantenida) ---
-        const twoDaysAgo = Date.now() - (48 * 60 * 60 * 1000);
-        
-        const recentItems = allUnifiedHistory.filter((item: any) => {
-            return item.timestamp > twoDaysAgo;
-        });
-
-        const calculatedHistoryString = recentItems.length > 0 
-            ? recentItems.map((h: any) => {
-                const dateStr = new Date(h.timestamp).toLocaleDateString('es-ES', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-                if (h.type === 'exercise') {
-                    return `- [EJERCICIO ${dateStr}] 🏃 ${h.name} (${h.duration}min)`;
-                } else {
-                    return `- [COMIDA ${dateStr}] ${h.title} (${h.calories} kcal)`;
-                }
-            }).join('\n')
-            : "No hay actividad registrada en las últimas 48 horas.";
-
-        const systemText = `
-Eres 'Level Up Coach', experto en nutrición y fitness.
-${timeContextPrompt} // ¡NUEVA INFORMACIÓN DE HORA INYECTADA!
-[DATOS DEL JUGADOR]: Score ${score} | Racha ${streak} días.
-[CONTEXTO RECIENTE (48h)]: ${calculatedHistoryString}
-[INVENTARIO]: ${pantry.join(', ')}.
-
-[REGLAS]: Sé breve, motivador, y si das una receta completa, INCLUYE SIEMPRE el JSON al final.
-`;
-
-        // Limpieza de historial para el API
-        let cleanHistory = history.map(h => ({
-            role: h.role === 'user' ? 'user' : 'model',
-            parts: [{ text: h.parts[0].text }]
-        }));
-        if (cleanHistory.length > 0 && cleanHistory[0].role === 'model') { cleanHistory.shift(); }
-
-        const chat = model.startChat({
-            history: cleanHistory,
-            systemInstruction: { role: "system", parts: [{ text: systemText }] }
-        });
-
-        const result = await chat.sendMessage(message);
-        return result.response.text();
-
-    } catch (error) {
-        console.error("Error en chat (FATAL):", error);
-        // Manejo de error de inicialización
-        if ((error as Error).message.includes("no inicializado")) {
-            return "El servicio de Gemini no está inicializado. Por favor, asegúrate de haber ingresado tu API Key en la pantalla de inicio.";
-        }
-        return "Error de conexión. Asegúrate de que tu llave API sea válida.";
+    // Tu lógica de horarios intacta
+    if (currentHour >= 5 && currentHour < 12) {
+        mealContext += "MAÑANA (Desayuno).";
+        if (!hasBreakfast && currentHour >= 8) missingMealPrompt = "⚠️ INSTRUCCIÓN: No ha desayunado. Prioriza sugerir desayuno energético.";
+        else if (hasBreakfast && currentHour >= 11) missingMealPrompt = "Ya desayunó. Sugiere snack ligero.";
+    } else if (currentHour >= 12 && currentHour < 18) { // Ajusté a 18 para cubrir tarde
+        mealContext += "MEDIODÍA (Comida).";
+        if (!hasLunch && currentHour >= 14) missingMealPrompt = "⚠️ INSTRUCCIÓN: No ha comido. Prioriza sugerir plato fuerte.";
+        else if (hasLunch) missingMealPrompt = "Ya comió. Sugiere snack o té.";
+    } else if (currentHour >= 18 && currentHour < 22) {
+        mealContext += "NOCHE (Cena).";
+        if (!hasDinner && currentHour >= 20) missingMealPrompt = "⚠️ INSTRUCCIÓN: No ha cenado. Sugiere cena ligera con proteína.";
+        else if (hasDinner) missingMealPrompt = "Ya cenó. Felicita y sugiere descanso.";
+    } else {
+        mealContext += "MADRUGADA/DESCANSO.";
+        missingMealPrompt = "Promueve solo hidratación o descanso.";
     }
+
+    const timeContextPrompt = `
+    [CONTEXTO TEMPORAL]:
+    - HORA: ${timeOfDay} | FASE: ${mealContext}
+    - ${missingMealPrompt}
+    `;
+
+    // --- NUEVO: LÓGICA DE SUEÑO (INYECTADA) ---
+    let sleepContext = "";
+    if (wellnessSettings?.enableSleep) {
+        if (lastNightSleepHours !== null) {
+            if (lastNightSleepHours < 6) {
+                sleepContext = `⚠️ ALERTA BIENESTAR: El usuario durmió solo ${lastNightSleepHours}h. Está cansado. SUGERIR: Energía sostenida, evitar comidas pesadas.`;
+            } else {
+                sleepContext = `✅ BIENESTAR: Sueño recuperador (${lastNightSleepHours}h).`;
+            }
+        }
+    }
+
+    // --- LÓGICA DE 48 HORAS (MEJORADA) ---
+    const twoDaysAgo = Date.now() - (48 * 60 * 60 * 1000);
+    const recentItems = allUnifiedHistory.filter((item: any) => {
+        const t = item.consumedAt || item.timestamp;
+        return t > twoDaysAgo;
+    });
+
+    const calculatedHistoryString = recentItems.length > 0 
+        ? recentItems.map((h: any) => {
+            const t = h.consumedAt || h.timestamp;
+            const dateStr = new Date(t).toLocaleDateString('es-ES', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+            if (h.type === 'exercise') return `- [EJERCICIO ${dateStr}] 🏃 ${h.name} (${h.duration}min, ${h.caloriesBurned}kcal)`;
+            return `- [COMIDA ${dateStr}] ${h.title} (${h.calories} kcal)`;
+        }).join('\n')
+        : "Sin actividad reciente.";
+
+    // --- SYSTEM PROMPT FINAL ---
+    const systemText = `
+    Eres 'Level Up Coach', experto en nutrición y fitness.
+    
+    [DATOS JUGADOR]: Score ${score} | Racha ${streak}.
+    ${sleepContext}
+
+    ${timeContextPrompt}
+
+    [HISTORIAL RECIENTE 48H]:
+    ${calculatedHistoryString}
+
+    [INVENTARIO]: ${pantry.join(', ')}.
+
+    [REGLAS]:
+    1. Sé breve y motivador.
+    2. Si sugieres receta, verifica ingredientes.
+    3. Si das una receta completa, INCLUYE SIEMPRE este JSON al final:
+    \`\`\`json
+    { "type": "recipe_card", "title": "Nombre", "time": "15m", "ingredients": [], "instructions": [], "macros": {"calories": "0", "protein": "0", "carbs": "0", "fats": "0"} }
+    \`\`\`
+    `;
+
+    // --- Limpieza y Envío ---
+    let cleanHistory = history.map(h => ({
+      role: h.role === 'user' ? 'user' : 'model',
+      parts: [{ text: h.parts[0].text }]
+    }));
+    if (cleanHistory.length > 0 && cleanHistory[0].role === 'model') { cleanHistory.shift(); }
+
+    const chat = model.startChat({
+      history: cleanHistory,
+      systemInstruction: { role: "system", parts: [{ text: systemText }] }
+    });
+
+    const result = await chat.sendMessage(message);
+    return result.response.text();
+
+  } catch (error) {
+    console.error("Error en chat (FATAL):", error);
+    if ((error as Error).message.includes("no inicializado")) {
+        return "Gemini no está inicializado. Ingresa tu API Key en inicio.";
+    }
+    return "Error de conexión. Verifica tu API Key.";
+  }
 };
 
 // --- EL RESTO DE FUNCIONES SE AJUSTAN IGUAL ---

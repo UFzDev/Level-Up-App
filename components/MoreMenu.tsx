@@ -28,6 +28,14 @@ const MoreMenu: React.FC<MoreMenuProps> = ({ onNavigate }) => {
       color: 'bg-blue-50 text-blue-600'
     },
     {
+      id: 'wellness',
+      label: 'Ajustes de Bienestar',
+      desc: 'Activar sueño, pasos y hábitos',
+      icon: '⚙️',
+      action: () => onNavigate(AppTab.WELLNESS_SETTINGS),
+      color: 'bg-teal-50 text-teal-600'
+    },
+    {
         id: 'pantry',
         label: 'Mi Despensa',
         desc: 'Gestiona tus ingredientes',
@@ -155,7 +163,7 @@ const MoreMenu: React.FC<MoreMenuProps> = ({ onNavigate }) => {
       </div>
 
       <div className="mt-8 text-center text-xs text-gray-400">
-        <p>Nutri-Flex v11.0</p>
+        <p>Nutri-Flex v12.0</p>
         <p>Tu Asistente 80/20</p>
       </div>
     </div>

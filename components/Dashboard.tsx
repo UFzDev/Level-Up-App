@@ -1,8 +1,8 @@
 
 import React, { useEffect, useState } from 'react';
-import { getDailyBreakdown, getStreaks, updateWater, logMeal, logExercise } from '../services/storageService';
+import { getDailyBreakdown, getStreaks, updateWater, logMeal, logExercise, getWellnessSettings, logSleep, getTodaySleep, logSteps, getTodaySteps, getHabits, addHabit, deleteHabit, toggleHabitForToday, getTodayHabitLogs } from '../services/storageService';
 import { analyzeFoodImpact, estimateCaloriesBurned } from '../services/geminiService';
-import { DailyBreakdown, Streaks, Intensity } from '../types';
+import { DailyBreakdown, Streaks, Intensity, WellnessSettings, Habit } from '../types';
 import { motion, useSpring, useTransform, AnimatePresence } from 'framer-motion';
 
 // Helper for counting up numbers
@@ -17,10 +17,81 @@ const AnimatedNumber = ({ value }: { value: number }) => {
   return <motion.span>{display}</motion.span>;
 };
 
+const CollapsibleCard: React.FC<{
+    title: string;
+    icon: string;
+    metaLabel?: string;
+    streak?: number;
+    colorTheme: 'green' | 'orange' | 'blue' | 'indigo' | 'cyan' | 'pink';
+    children: React.ReactNode;
+}> = ({ title, icon, metaLabel, streak, colorTheme, children }) => {
+    // V13 Change: Default to collapsed (false)
+    const [isOpen, setIsOpen] = useState(false);
+
+    const colors = {
+        green: { bgIcon: 'bg-nutri-green-100', textIcon: 'text-nutri-green-600', streakBg: 'bg-nutri-green-50', streakText: 'text-nutri-green-600' },
+        orange: { bgIcon: 'bg-orange-100', textIcon: 'text-orange-600', streakBg: 'bg-orange-50', streakText: 'text-orange-600' },
+        blue: { bgIcon: 'bg-blue-100', textIcon: 'text-blue-600', streakBg: 'bg-blue-50', streakText: 'text-blue-600' },
+        indigo: { bgIcon: 'bg-indigo-100', textIcon: 'text-indigo-600', streakBg: 'bg-indigo-50', streakText: 'text-indigo-600' },
+        cyan: { bgIcon: 'bg-cyan-100', textIcon: 'text-cyan-600', streakBg: 'bg-cyan-50', streakText: 'text-cyan-600' },
+        pink: { bgIcon: 'bg-pink-100', textIcon: 'text-pink-600', streakBg: 'bg-pink-50', streakText: 'text-pink-600' },
+    };
+    const theme = colors[colorTheme];
+
+    return (
+        <motion.div 
+            layout
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm overflow-hidden"
+        >
+            <div className="flex justify-between items-center cursor-pointer" onClick={() => setIsOpen(!isOpen)}>
+                 <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 ${theme.bgIcon} ${theme.textIcon} rounded-full flex items-center justify-center text-xl`}>{icon}</div>
+                    <div>
+                        <h3 className="font-bold text-gray-800">{title}</h3>
+                        {metaLabel && <p className="text-xs text-gray-400">{metaLabel}</p>}
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    {streak !== undefined && (
+                        <div className={`flex items-center gap-1 ${theme.streakBg} ${theme.streakText} px-2 py-1 rounded-lg text-xs font-bold`}>
+                            🔥 {streak}
+                        </div>
+                    )}
+                    <span className="text-gray-300 text-xs transform transition-transform duration-300" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+            </div>
+            <AnimatePresence>
+                {isOpen && (
+                    <motion.div 
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
+                    >
+                        <div className="pt-4">
+                            {children}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </motion.div>
+    );
+};
+
 const Dashboard: React.FC = () => {
   const [breakdown, setBreakdown] = useState<DailyBreakdown | null>(null);
-  const [streaks, setStreaks] = useState<Streaks>({ nutrition: 0, exercise: 0, hydration: 0 });
+  const [streaks, setStreaks] = useState<Streaks>({ nutrition: 0, exercise: 0, hydration: 0, habits: 0 });
+  const [settings, setSettings] = useState<WellnessSettings | null>(null);
   
+  // New Modules State
+  const [sleepHours, setSleepHours] = useState<number | ''>('');
+  const [stepsCount, setStepsCount] = useState<number | ''>('');
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [habitLogs, setHabitLogs] = useState<string[]>([]);
+  const [newHabitTitle, setNewHabitTitle] = useState('');
+
   // Quick Log State
   const [quickTitle, setQuickTitle] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -39,6 +110,14 @@ const Dashboard: React.FC = () => {
   const refreshData = () => {
     setBreakdown(getDailyBreakdown());
     setStreaks(getStreaks());
+    setSettings(getWellnessSettings());
+    
+    // Refresh Module Data
+    const s = getTodaySleep();
+    setSleepHours(s !== null ? s : '');
+    setStepsCount(getTodaySteps() || '');
+    setHabits(getHabits());
+    setHabitLogs(getTodayHabitLogs());
   };
 
   useEffect(() => {
@@ -46,6 +125,8 @@ const Dashboard: React.FC = () => {
     const now = new Date();
     setExTime(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
   }, []);
+
+  // HANDLERS
 
   const handleQuickLog = async () => {
     if (!quickTitle.trim()) return;
@@ -89,11 +170,47 @@ const Dashboard: React.FC = () => {
       }
   };
 
-  if (!breakdown) return <div className="p-10 text-center">Cargando métricas...</div>;
+  const handleSaveSleep = () => {
+      if (sleepHours !== '') {
+          logSleep(Number(sleepHours));
+          alert("💤 Sueño registrado.");
+          refreshData();
+      }
+  };
+
+  const handleSaveSteps = () => {
+      if (stepsCount !== '') {
+          logSteps(Number(stepsCount));
+          alert("👣 Pasos actualizados.");
+          refreshData();
+      }
+  };
+
+  const handleAddHabit = () => {
+      if (newHabitTitle.trim()) {
+          addHabit(newHabitTitle.trim());
+          setNewHabitTitle('');
+          refreshData();
+      }
+  };
+
+  const handleDeleteHabit = (id: string) => {
+      if (window.confirm('¿Borrar hábito?')) {
+          deleteHabit(id);
+          refreshData();
+      }
+  };
+
+  const handleToggleHabit = (id: string) => {
+      toggleHabitForToday(id);
+      refreshData();
+  };
+
+  if (!breakdown || !settings) return <div className="p-10 text-center">Cargando métricas...</div>;
 
   return (
-    <div className="p-4 space-y-6 pb-24">
-      {/* TOTAL SCORE HEADER - ANIMATED */}
+    <div className="p-4 space-y-4 pb-24">
+      {/* TOTAL SCORE HEADER */}
       <div className="text-center py-4">
           <h1 className="text-5xl font-black text-gray-800 tracking-tight flex justify-center items-baseline gap-1">
               <AnimatedNumber value={breakdown.totalXP} />
@@ -103,29 +220,9 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        {/* 1. NUTRITION CARD */}
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm relative overflow-hidden"
-        >
-            <div className="flex justify-between items-start mb-4 z-10 relative">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-nutri-green-100 text-nutri-green-600 rounded-full flex items-center justify-center text-xl">🥗</div>
-                    <div>
-                        <h3 className="font-bold text-gray-800">Nutrición</h3>
-                        <p className="text-xs text-gray-400">Meta: 500 XP</p>
-                    </div>
-                </div>
-                <motion.div 
-                  whileHover={{ scale: 1.1 }}
-                  className="flex items-center gap-1 bg-orange-50 text-orange-600 px-2 py-1 rounded-lg text-xs font-bold"
-                >
-                    🔥 {streaks.nutrition} días
-                </motion.div>
-            </div>
-            
+        
+        {/* 1. NUTRITION CARD (Collapsible) */}
+        <CollapsibleCard title="Nutrición" icon="🥗" metaLabel="Meta: 500 XP" streak={streaks.nutrition} colorTheme="green">
             <div className="mb-2 flex justify-between text-xs font-bold text-gray-600">
                 <span>{breakdown.nutrition.label}</span>
                 <span>{Math.round(breakdown.nutrition.percent * 100)}%</span>
@@ -138,31 +235,10 @@ const Dashboard: React.FC = () => {
                     transition={{ duration: 1, ease: "easeOut" }}
                 ></motion.div>
             </div>
-        </motion.div>
+        </CollapsibleCard>
 
-        {/* 2. EXERCISE CARD */}
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm relative overflow-hidden"
-        >
-            <div className="flex justify-between items-start mb-4 z-10 relative">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center text-xl">💪</div>
-                    <div>
-                        <h3 className="font-bold text-gray-800">Ejercicio</h3>
-                        <p className="text-xs text-gray-400">Meta: 300 XP</p>
-                    </div>
-                </div>
-                <motion.div 
-                  whileHover={{ scale: 1.1 }}
-                  className="flex items-center gap-1 bg-yellow-50 text-yellow-600 px-2 py-1 rounded-lg text-xs font-bold"
-                >
-                    ⚡ {streaks.exercise} días
-                </motion.div>
-            </div>
-
+        {/* 2. EXERCISE CARD (Collapsible) */}
+        <CollapsibleCard title="Ejercicio" icon="💪" metaLabel="Meta: 300 XP" streak={streaks.exercise} colorTheme="orange">
             <div className="mb-2 flex justify-between text-xs font-bold text-gray-600">
                 <span>{breakdown.exercise.label}</span>
                 <span>{Math.round(breakdown.exercise.percent * 100)}%</span>
@@ -175,7 +251,6 @@ const Dashboard: React.FC = () => {
                     transition={{ duration: 1, ease: "easeOut" }}
                 ></motion.div>
             </div>
-
             <motion.button 
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowExerciseModal(true)}
@@ -183,33 +258,12 @@ const Dashboard: React.FC = () => {
             >
                 Registrar Actividad
             </motion.button>
-        </motion.div>
+        </CollapsibleCard>
 
-        {/* 3. HYDRATION CARD */}
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="bg-gradient-to-br from-blue-50 to-white border border-blue-100 rounded-2xl p-5 shadow-sm relative overflow-hidden"
-        >
-            <div className="flex justify-between items-start mb-4 z-10 relative">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xl">💧</div>
-                    <div>
-                        <h3 className="font-bold text-gray-800">Hidratación</h3>
-                        <p className="text-xs text-gray-400">Meta: 200 XP</p>
-                    </div>
-                </div>
-                <motion.div 
-                  whileHover={{ scale: 1.1 }}
-                  className="flex items-center gap-1 bg-blue-100 text-blue-600 px-2 py-1 rounded-lg text-xs font-bold"
-                >
-                    💧 {streaks.hydration} días
-                </motion.div>
-            </div>
-
-            <div className="flex items-center justify-between mb-4">
-                <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleWater(-1)} className="w-10 h-10 bg-white shadow text-blue-500 rounded-full font-bold text-xl hover:scale-95 transition-transform">-</motion.button>
+        {/* 3. HYDRATION CARD (Collapsible) */}
+        <CollapsibleCard title="Hidratación" icon="💧" metaLabel="Meta: 200 XP" streak={streaks.hydration} colorTheme="blue">
+             <div className="flex items-center justify-between mb-4">
+                <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleWater(-1)} className="w-10 h-10 bg-white shadow text-blue-500 rounded-full font-bold text-xl hover:scale-95 transition-transform border border-blue-100">-</motion.button>
                 <div className="text-center">
                     <motion.span 
                       key={breakdown.hydration.label}
@@ -223,7 +277,6 @@ const Dashboard: React.FC = () => {
                 </div>
                 <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleWater(1)} className="w-10 h-10 bg-blue-500 shadow text-white rounded-full font-bold text-xl hover:scale-95 transition-transform">+</motion.button>
             </div>
-            
             <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
                 <motion.div 
                     className="h-full bg-blue-500"
@@ -232,7 +285,95 @@ const Dashboard: React.FC = () => {
                     transition={{ duration: 0.5, ease: "easeOut" }}
                 ></motion.div>
             </div>
-        </motion.div>
+        </CollapsibleCard>
+
+        {/* --- OPTIONAL MODULES --- */}
+
+        {/* SLEEP MODULE */}
+        {settings.enableSleep && (
+            <CollapsibleCard title="Horas de Sueño" icon="😴" colorTheme="indigo">
+                <div className="flex gap-2">
+                    <input 
+                        type="number" 
+                        placeholder="Horas (ej: 7.5)" 
+                        value={sleepHours} 
+                        onChange={(e) => setSleepHours(e.target.value ? Number(e.target.value) : '')}
+                        className="flex-1 border border-gray-300 rounded-lg px-3 py-2 bg-white text-black text-sm"
+                    />
+                    <button 
+                        onClick={handleSaveSleep}
+                        className="bg-indigo-600 text-white px-4 rounded-lg font-bold text-sm"
+                    >
+                        Guardar
+                    </button>
+                </div>
+            </CollapsibleCard>
+        )}
+
+        {/* STEPS MODULE */}
+        {settings.enableSteps && (
+            <CollapsibleCard title="Pasos" icon="🦶" colorTheme="cyan">
+                 <div className="flex gap-2 mb-2">
+                    <input 
+                        type="number" 
+                        placeholder="Total hoy" 
+                        value={stepsCount} 
+                        onChange={(e) => setStepsCount(e.target.value ? Number(e.target.value) : '')}
+                        className="flex-1 border border-gray-300 rounded-lg px-3 py-2 bg-white text-black text-sm"
+                    />
+                    <button 
+                        onClick={handleSaveSteps}
+                        className="bg-cyan-600 text-white px-4 rounded-lg font-bold text-sm"
+                    >
+                        Actualizar
+                    </button>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <motion.div 
+                        className="h-full bg-cyan-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.min(((Number(stepsCount) || 0) / 10000) * 100, 100)}%` }}
+                    ></motion.div>
+                </div>
+                <p className="text-[10px] text-gray-400 text-right mt-1">Meta: 10,000</p>
+            </CollapsibleCard>
+        )}
+
+        {/* HABITS MODULE */}
+        {settings.enableHabits && (
+            <CollapsibleCard title="Hábitos" icon="✨" streak={streaks.habits} colorTheme="pink">
+                <div className="space-y-2 mb-4">
+                    {habits.length === 0 && <p className="text-xs text-gray-400 italic">Agrega hábitos para monitorear.</p>}
+                    {habits.map(habit => {
+                        const isDone = habitLogs.includes(habit.id);
+                        return (
+                            <div key={habit.id} className="flex items-center justify-between bg-pink-50 p-2 rounded-lg">
+                                <span className={`text-sm ${isDone ? 'line-through text-gray-400' : 'text-gray-700'}`}>{habit.title}</span>
+                                <div className="flex items-center gap-2">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={isDone} 
+                                        onChange={() => handleToggleHabit(habit.id)}
+                                        className="w-5 h-5 text-pink-600 rounded focus:ring-pink-500"
+                                    />
+                                    <button onClick={() => handleDeleteHabit(habit.id)} className="text-gray-400 text-xs">✕</button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="flex gap-2">
+                    <input 
+                        value={newHabitTitle}
+                        onChange={(e) => setNewHabitTitle(e.target.value)}
+                        placeholder="Nuevo hábito..."
+                        className="flex-1 border border-gray-300 rounded-lg px-3 py-1 bg-white text-black text-xs"
+                    />
+                    <button onClick={handleAddHabit} className="bg-pink-500 text-white px-3 rounded-lg text-xs font-bold">+</button>
+                </div>
+            </CollapsibleCard>
+        )}
+
       </div>
 
       {/* QUICK LOG */}

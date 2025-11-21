@@ -4,17 +4,13 @@ import { chatWithChef } from '../services/geminiService';
 import { getPantry, getUserRecipes, getRecentHistoryAsString, logMeal, getDailyScore, getStreak, saveChatHistory, loadChatHistory } from '../services/storageService';
 import { Message, StructuredRecipe } from '../types';
 import ReactMarkdown from 'react-markdown';
-import { motion, AnimatePresence } from 'framer-motion';
+import { getTodaySleep, getWellnessSettings } from '../services/storageService';
 
 const RecipeCard: React.FC<{ data: StructuredRecipe, onCook: () => void }> = ({ data, onCook }) => {
   const [showMacros, setShowMacros] = useState(false);
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="bg-white border border-gray-200 rounded-xl overflow-hidden my-2 shadow-sm"
-    >
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden my-2 shadow-sm">
       <div className="bg-nutri-green-50 p-3 border-b border-nutri-green-100 flex justify-between items-center">
         <h3 className="font-bold text-gray-800">{data.title}</h3>
         <span className="text-xs font-medium bg-white px-2 py-1 rounded-full text-gray-600 border">⏱️ {data.time}</span>
@@ -63,14 +59,8 @@ const RecipeCard: React.FC<{ data: StructuredRecipe, onCook: () => void }> = ({ 
             </button>
         </div>
 
-        <AnimatePresence>
         {showMacros && (
-          <motion.div 
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="grid grid-cols-4 gap-2 text-center mt-2 pt-2 border-t border-gray-100"
-          >
+          <div className="grid grid-cols-4 gap-2 text-center mt-2 pt-2 border-t border-gray-100 animate-fadeIn">
             <div className="bg-gray-50 rounded p-1">
               <p className="text-[10px] text-gray-500">Calorías</p>
               <p className="text-xs font-bold text-gray-800">{data.macros.calories}</p>
@@ -87,11 +77,10 @@ const RecipeCard: React.FC<{ data: StructuredRecipe, onCook: () => void }> = ({ 
               <p className="text-[10px] text-gray-500">Grasas</p>
               <p className="text-xs font-bold text-gray-800">{data.macros.fats}</p>
             </div>
-          </motion.div>
+          </div>
         )}
-        </AnimatePresence>
       </div>
-    </motion.div>
+    </div>
   );
 };
 
@@ -117,6 +106,7 @@ const Chatbot: React.FC = () => {
     scrollToBottom();
   }, [messages]);
 
+  // Auto-save messages whenever they change
   useEffect(() => {
     saveChatHistory(messages);
   }, [messages]);
@@ -140,12 +130,15 @@ const Chatbot: React.FC = () => {
         .filter(m => m.role !== 'system')
         .map(m => ({ role: m.role, parts: [{ text: m.text }] }));
 
+      // Gather context for V3 Brain + Gamification
       const contextData = {
           pantry: getPantry(),
           recipes: getUserRecipes(),
           historyString: getRecentHistoryAsString(48),
           score: getDailyScore(),
-          streak: getStreak()
+          streak: getStreak(),
+          lastNightSleepHours: getTodaySleep(), 
+          wellnessSettings: getWellnessSettings()
       };
 
       const rawResponse = await chatWithChef(history, userMsg.text, contextData);
@@ -186,24 +179,21 @@ const Chatbot: React.FC = () => {
   };
 
   const handleCook = (recipe: StructuredRecipe) => {
+    // Extract numeric calories from string "350 kcal" -> 350
     const calString = recipe.macros.calories || "400";
     const calNumber = parseInt(calString.replace(/\D/g, '')) || 400;
+    
+    // Save as PENDING
     logMeal(recipe.title, 'pending', true, calNumber, '');
+    
     alert("✅ Receta enviada a 'En Cocina'. ¡Ve a la pestaña Historial cuando la termines!");
   };
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 pb-24">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <AnimatePresence initial={false}>
         {messages.map((msg) => (
-          <motion.div 
-            key={msg.id} 
-            initial={{ opacity: 0, y: 20, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.3 }}
-            className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-          >
+          <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
             {msg.text && (
                 <div
                 className={`max-w-[90%] rounded-2xl px-4 py-3 shadow-sm ${
@@ -226,16 +216,12 @@ const Chatbot: React.FC = () => {
                     />
                 </div>
             )}
-          </motion.div>
+          </div>
         ))}
-        </AnimatePresence>
         {loading && (
-          <motion.div 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="bg-white rounded-2xl px-4 py-3 shadow-sm border w-16 flex justify-center"
-          >
+          <div className="bg-white rounded-2xl px-4 py-3 shadow-sm border w-16 flex justify-center">
              <span className="animate-pulse">...</span>
-          </motion.div>
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -248,10 +234,9 @@ const Chatbot: React.FC = () => {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
             placeholder="Ej: Algo rápido con pollo..."
-            className="flex-1 border-gray-300 border rounded-full px-4 py-3 focus:outline-none focus:ring-2 focus:ring-nutri-green-500 bg-gray-50 text-gray-900"
+            className="flex-1 border-gray-300 border rounded-full px-4 py-3 focus:outline-none focus:ring-2 focus:ring-nutri-green-500 bg-gray-50"
           />
-          <motion.button
-            whileTap={{ scale: 0.9 }}
+          <button
             onClick={handleSend}
             disabled={loading || !input.trim()}
             className="bg-nutri-green-600 text-white rounded-full p-3 shadow-md hover:bg-nutri-green-700"
@@ -259,7 +244,7 @@ const Chatbot: React.FC = () => {
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
             </svg>
-          </motion.button>
+          </button>
         </div>
       </div>
     </div>
