@@ -209,25 +209,32 @@ export const logMeal = (
     title: string, 
     status: 'pending' | 'completed', 
     isHealthy: boolean, 
-    calories: number,
-    notes: string = '',
-    scoreValue?: number
+    calories: number, 
+    notes: string = '', 
+    scoreValue?: number,
+    customTimestamp?: number // <--- NUEVO PARÁMETRO
 ): HistoryItem[] => {
   const current = getUnifiedHistory();
+  
+  // Usamos el tiempo personalizado si existe, si no, usamos ahora
+  const finalTime = customTimestamp || Date.now();
+
   const newLog: MealLog = {
     type: 'meal',
-    id: Date.now().toString(),
+    id: Date.now().toString(), // El ID sí puede ser el momento de creación real
     title,
     status,
     isHealthy,
     calories,
     userNotes: notes,
-    timestamp: Date.now(),
-    consumedAt: status === 'completed' ? Date.now() : undefined,
+    timestamp: finalTime, // <--- AQUÍ SE GUARDA LA HORA REAL
+    consumedAt: status === 'completed' ? finalTime : undefined,
     scoreValue
   };
   
-  const updated = [newLog, ...current];
+  // Ordenamos para que, si metiste algo viejo, no quede hasta arriba
+  const updated = [newLog, ...current].sort((a, b) => b.timestamp - a.timestamp);
+  
   saveUnifiedHistory(updated);
   return updated;
 };

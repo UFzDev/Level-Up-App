@@ -5,7 +5,10 @@ import { analyzeFoodImpact, estimateCaloriesBurned, analyzeMealImage } from '../
 import { DailyBreakdown, Streaks, Intensity, WellnessSettings, Habit } from '../types';
 import { motion, useSpring, useTransform, AnimatePresence } from 'framer-motion';
 
-
+const getCurrentTime = () => {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+};
 // Helper for counting up numbers
 const AnimatedNumber = ({ value }: { value: number }) => {
   const spring = useSpring(0, { mass: 0.8, stiffness: 75, damping: 15 });
@@ -85,13 +88,15 @@ const Dashboard: React.FC = () => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [showMealModal, setShowMealModal] = useState(false);
   const [isAnalyzingMeal, setIsAnalyzingMeal] = useState(false);
+  const [quickLogTime, setQuickLogTime] = useState(getCurrentTime());
   
   // Datos temporales del plato detectado
   const [detectedMeal, setDetectedMeal] = useState({
     title: '',
     calories: 0,
     isHealthy: true,
-    notes: ''
+    notes: '',
+    time: '',
   });
 
 
@@ -142,21 +147,20 @@ const Dashboard: React.FC = () => {
 
   // HANDLERS
 
-  const handleQuickLog = async () => {
+const handleQuickLog = () => {
     if (!quickTitle.trim()) return;
-    setIsAnalyzing(true);
-    try {
-        const verdict = await analyzeFoodImpact(quickTitle);
-        logMeal(quickTitle.trim(), 'completed', verdict.isHealthy, verdict.calories, 'Juez IA', verdict.scoreImpact);
-        setQuickTitle('');
-        refreshData();
-        alert(`${verdict.isHealthy ? '✅' : '🚨'} ${verdict.reason}\n\nImpacto: ${verdict.scoreImpact > 0 ? '+' : ''}${verdict.scoreImpact} XP`);
-    } catch (error) {
-        logMeal(quickTitle.trim(), 'completed', false, 300, 'Manual');
-        refreshData();
-    } finally {
-        setIsAnalyzing(false);
-    }
+    
+    // Solo abrimos el modal para configurar la hora.
+    // NO llamamos a la IA todavía. El juicio será sorpresa.
+    setDetectedMeal({
+        title: quickTitle,
+        calories: 0,        // 0 indica que la IA debe calcularlo al guardar
+        isHealthy: true,    // Valor por defecto (irrelevante, se sobrescribirá)
+        notes: '',
+        time: getCurrentTime()
+    });
+    setQuickTitle('');
+    setShowMealModal(true);
   };
 
   const handleWater = (change: number) => {
@@ -250,7 +254,8 @@ const Dashboard: React.FC = () => {
             title: result.dishName || "Comida sin nombre",
             calories: Number(result.calories) || 0,
             isHealthy: result.isHealthy !== undefined ? result.isHealthy : true,
-            notes: result.description || ""
+            notes: result.description || "",
+            time: getCurrentTime(),
         });
         
         // ¡ABRIR MODAL!
@@ -266,18 +271,61 @@ const Dashboard: React.FC = () => {
   };
 
   // 2. Función para guardar finalmente
-  const handleConfirmMeal = () => {
-    logMeal(
-        detectedMeal.title, 
-        'completed', 
-        detectedMeal.isHealthy, 
-        detectedMeal.calories, 
-        detectedMeal.notes + " [Escaneado 📸]",
-        detectedMeal.isHealthy ? 100 : -50
-    );
-    setShowMealModal(false);
-    refreshData();
-    alert("✅ Comida registrada.");
+  const handleConfirmMeal = async () => {
+    // Bloqueamos el botón para que no le des doble click
+    setIsAnalyzing(true);
+    
+    // 1. Obtener el Timestamp de la hora elegida
+    const [h, m] = detectedMeal.time.split(':').map(Number);
+    const customDate = new Date();
+    customDate.setHours(h, m, 0, 0);
+    const finalTime = customDate.getTime();
+
+    try {
+        // 2. LA SENTENCIA: Llamamos a la IA con el contexto de la hora elegida
+        // Si viene de foto (calories > 0), ya tenemos datos, pero si es texto (0), analizamos todo.
+        let finalVerdict;
+
+        if (detectedMeal.calories === 0) {
+             // Es texto: La IA decide todo (Calorías + Saludable + Impacto)
+             finalVerdict = await analyzeFoodImpact(detectedMeal.title, finalTime);
+        } else {
+             // Es foto: Ya tenemos calorías, pero re-evaluamos si es saludable según la HORA
+             // (Opcional: puedes usar analyzeFoodImpact también aquí para re-juzgar el contexto)
+             finalVerdict = await analyzeFoodImpact(detectedMeal.title, finalTime);
+             // Respetamos las calorías de la foto si la IA falló en el re-análisis
+             if (finalVerdict.calories === 0) finalVerdict.calories = detectedMeal.calories;
+        }
+
+        // 3. EJECUCIÓN: Guardado directo sin preguntar
+        logMeal(
+            detectedMeal.title, 
+            'completed', 
+            finalVerdict.isHealthy, 
+            finalVerdict.calories, 
+            (finalVerdict.reason || detectedMeal.notes) + " [Juez IA ⚖️]",
+            finalVerdict.scoreImpact, // Puntos calculados (positivos o negativos)
+            finalTime
+        );
+
+        // 4. Notificación Final (Ya es tarde para cancelar)
+        setShowMealModal(false);
+        refreshData();
+        
+        if (finalVerdict.isHealthy) {
+            alert(`✅ ¡Bien hecho! Registrado como Saludable (+${finalVerdict.scoreImpact} XP)\n"${finalVerdict.reason}"`);
+        } else {
+            alert(`⚠️ Registrado como Antojo (${finalVerdict.scoreImpact} XP)\n"${finalVerdict.reason}"`);
+        }
+
+    } catch (error) {
+        // Fallback de emergencia
+        logMeal(detectedMeal.title, 'completed', true, 300, 'Registro manual (Error IA)', 10, finalTime);
+        setShowMealModal(false);
+        refreshData();
+    } finally {
+        setIsAnalyzing(false);
+    }
   };
 
   if (!breakdown || !settings) return <div className="p-10 text-center">Cargando métricas...</div>;
@@ -459,12 +507,12 @@ const Dashboard: React.FC = () => {
 
       </div>
 
-      {/* QUICK LOG */}
+{/* REGISTRO RÁPIDO DE COMIDA (DISEÑO ARREGLADO) */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
-        <h3 className="font-bold text-gray-800 mb-3 text-sm uppercase">Registro Rápido de Comida</h3>
+        <h3 className="font-bold text-gray-800 mb-3 text-sm uppercase">Registro Rápido</h3>
+        
         <div className="flex gap-2">
-
-            {/* BOTÓN DE CÁMARA */}
+            {/* INPUT OCULTO PARA FOTOS */}
             <input 
                 type="file" 
                 accept="image/*" 
@@ -472,27 +520,32 @@ const Dashboard: React.FC = () => {
                 ref={fileInputRef}
                 onChange={handleFileSelect}
             />
+            
+            {/* BOTÓN CÁMARA */}
             <motion.button 
                 whileTap={{ scale: 0.95 }}
                 onClick={() => fileInputRef.current?.click()} 
-                disabled={isAnalyzingMeal}
-                className="bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-bold text-xl disabled:opacity-50"
+                disabled={isAnalyzing || isAnalyzingMeal}
+                className="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg text-xl border border-gray-200 flex-shrink-0"
             >
                 {isAnalyzingMeal ? '⏳' : '📸'}
             </motion.button>
 
+            {/* INPUT DE TEXTO (Ocupa el resto del espacio) */}
             <input 
-                className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-nutri-green-500 outline-none bg-white text-gray-900"
+                className="flex-1 min-w-0 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-nutri-green-500 outline-none bg-white text-gray-900 placeholder-gray-400"
                 placeholder="Ej: 2 tacos de asada"
                 value={quickTitle}
                 onChange={(e) => setQuickTitle(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleQuickLog()}
             />
+
+            {/* BOTÓN OK (Sin hora aquí, la hora sale en el modal) */}
             <motion.button 
                 whileTap={{ scale: 0.95 }}
                 onClick={handleQuickLog}
                 disabled={isAnalyzing || !quickTitle.trim()}
-                className="bg-gray-900 text-white px-4 py-2 rounded-lg font-bold text-sm disabled:opacity-50"
+                className="bg-gray-900 text-white px-4 py-2 rounded-lg font-bold text-sm flex-shrink-0 disabled:opacity-50"
             >
                 {isAnalyzing ? '...' : 'OK'}
             </motion.button>
@@ -558,7 +611,7 @@ const Dashboard: React.FC = () => {
       )}
       </AnimatePresence>
 
-        {/* MODAL DE CONFIRMACIÓN DE FOTO */}
+    {/* MODAL DE CONFIRMACIÓN DE FOTO (DISEÑO CORREGIDO) */}
       <AnimatePresence>
       {showMealModal && (
           <motion.div 
@@ -566,72 +619,77 @@ const Dashboard: React.FC = () => {
             className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
           >
               <motion.div 
-                className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4"
+                className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl"
                 initial={{ scale: 0.9 }} animate={{ scale: 1 }}
               >
-                  <h3 className="text-xl font-bold text-gray-800 mb-4">🍽️ Confirmar Plato</h3>
+                  <h3 className="text-xl font-black text-gray-800 mb-6 text-center tracking-tight">🍽️ CONFIRMAR PLATO</h3>
                   
-                  {/* Campo de Nombre */}
-                  <div className="mb-3">
-                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Plato</label>
-                    <input 
-                        value={detectedMeal.title} 
-                        onChange={e => setDetectedMeal({...detectedMeal, title: e.target.value})}
-                        className="w-full border p-2 rounded text-black font-bold bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none" 
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 mb-3">
-                    {/* Campo de Calorías */}
-                    <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Calorías</label>
+                  <div className="space-y-4">
+                      {/* 1. NOMBRE DEL PLATO (Ancho completo) */}
+                      <div>
+                        <label className="text-xs font-bold text-gray-400 uppercase block mb-1 ml-1">Nombre del Plato</label>
                         <input 
-                            type="number"
-                            value={detectedMeal.calories} 
-                            onChange={e => setDetectedMeal({...detectedMeal, calories: Number(e.target.value)})}
-                            className="w-full border p-2 rounded text-black bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none" 
+                            value={detectedMeal.title} 
+                            onChange={e => setDetectedMeal({...detectedMeal, title: e.target.value})}
+                            className="w-full border border-gray-200 p-3 rounded-xl text-gray-800 font-bold bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none focus:bg-white transition-colors" 
+                            placeholder="Ej: Ensalada César"
                         />
-                    </div>
-                    
-                    {/* VEREDICTO DE IA (SOLO LECTURA) */}
-                    <div className="flex flex-col justify-end">
-                        <div className={`w-full px-2 py-2 rounded-lg border text-center text-[10px] font-bold uppercase tracking-wider flex items-center justify-center h-[42px] ${
-                            detectedMeal.isHealthy 
-                            ? 'bg-green-50 border-green-200 text-green-700' 
-                            : 'bg-orange-50 border-orange-200 text-orange-700'
-                        }`}>
-                            {detectedMeal.isHealthy ? '✅ Saludable' : '⚠️ Antojo'}
+                      </div>
+
+                      {/* 2. HORA Y CALORÍAS (Alineados en fila) */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-xs font-bold text-gray-400 uppercase block mb-1 ml-1">Hora</label>
+                            <input 
+                                type="time"
+                                value={detectedMeal.time} 
+                                onChange={e => setDetectedMeal({...detectedMeal, time: e.target.value})}
+                                className="w-full border border-gray-200 p-3 rounded-xl text-gray-800 font-medium bg-gray-50 text-center focus:ring-2 focus:ring-nutri-green-500 outline-none" 
+                            />
                         </div>
-                        <p className="text-[9px] text-gray-400 text-center mt-1">
-                            Juez IA (No editable)
-                        </p>
-                    </div>
-                  </div>
+                        <div>
+                            <label className="text-xs font-bold text-gray-400 uppercase block mb-1 ml-1">Calorías</label>
+                            <input 
+                                type="number"
+                                value={detectedMeal.calories} 
+                                onChange={e => setDetectedMeal({...detectedMeal, calories: Number(e.target.value)})}
+                                className="w-full border border-gray-200 p-3 rounded-xl text-gray-800 font-medium bg-gray-50 text-center focus:ring-2 focus:ring-nutri-green-500 outline-none" 
+                            />
+                        </div>
+                      </div>
 
-                  {/* Campo de Descripción */}
-                  <div className="mb-4">
-                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Descripción</label>
-                    <textarea 
-                        value={detectedMeal.notes} 
-                        onChange={e => setDetectedMeal({...detectedMeal, notes: e.target.value})}
-                        className="w-full border p-2 rounded text-black text-sm h-20 bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none resize-none" 
-                    />
-                  </div>
+                      {/* 3. ESTADO DEL ANÁLISIS */}
+                      <div className="mb-4">
+                            <div className={`w-full py-3 rounded-xl border-2 border-gray-100 bg-gray-50 text-center text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 text-gray-400`}>
+                                ⚖️ El Juez decidirá al guardar
+                            </div>
+                      </div>
 
-                  {/* Botones de Acción */}
-                  <div className="flex gap-3 pt-2">
-                      <button 
-                        onClick={() => setShowMealModal(false)} 
-                        className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-colors"
-                      >
-                        Cancelar
-                      </button>
-                      <button 
-                        onClick={handleConfirmMeal} 
-                        className="flex-1 py-3 bg-nutri-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-nutri-green-700 transition-colors"
-                      >
-                        Guardar
-                      </button>
+                      {/* 4. NOTAS */}
+                      <div>
+                        <label className="text-xs font-bold text-gray-400 uppercase block mb-1 ml-1">Notas / Ingredientes</label>
+                        <textarea 
+                            value={detectedMeal.notes} 
+                            onChange={e => setDetectedMeal({...detectedMeal, notes: e.target.value})}
+                            className="w-full border border-gray-200 p-3 rounded-xl text-gray-600 text-sm h-20 bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none resize-none focus:bg-white transition-colors" 
+                        />
+                      </div>
+
+                      {/* BOTONES */}
+                      <div className="flex gap-3 pt-2">
+                          <button 
+                            onClick={() => setShowMealModal(false)} 
+                            className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-colors"
+                          >
+                            Cancelar
+                          </button>
+                          <button 
+                            onClick={handleConfirmMeal} 
+                            className="flex-1 py-3 bg-nutri-green-600 text-white rounded-xl font-bold shadow-lg shadow-nutri-green-200 hover:bg-nutri-green-700 transition-all active:scale-95"
+                          >
+                            Guardar Registro
+                          </button>
+                      </div>
                   </div>
               </motion.div>
           </motion.div>

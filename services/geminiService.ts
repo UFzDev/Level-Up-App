@@ -190,39 +190,59 @@ export const chatWithChef = async (
 // --- EL RESTO DE FUNCIONES SE AJUSTAN IGUAL ---
 
 // --- HELPER: Contexto para Jueces ---
-const getJudgeContext = () => {
+const getJudgeContext = (customTimestamp?: number) => {
+    // Si nos mandan una hora específica (ej: la que pusiste en el modal), usamos esa.
+    // Si no, usamos "ahora mismo".
+    const now = customTimestamp ? new Date(customTimestamp) : new Date();
+    
     const sleep = getLastNightSleepHours();
     const exercises = getTodayExercises();
     const settings = getWellnessSettings();
-    const now = new Date();
     
-    // 1. Ejercicio Reciente
-    let exerciseContext = "Sedentario hoy.";
+    // 1. Contexto de Ejercicio (Comparado con la hora del registro)
+    let exerciseContext = "Sedentario hasta este momento.";
     if (exercises.length > 0) {
-        const last = exercises[exercises.length - 1];
-        const [h, m] = last.time.split(':').map(Number);
-        const exTime = new Date(); exTime.setHours(h, m, 0, 0);
-        const diffHours = (now.getTime() - exTime.getTime()) / 3600000;
-        
-        if (diffHours < 3) {
-            exerciseContext = `ALERTA: Entrenó hace ${diffHours.toFixed(1)}h (${last.intensity}). Necesita recuperación. Sé flexible con calorías nutritivas.`;
-        } else {
-            exerciseContext = `Hizo ejercicio hace ${diffHours.toFixed(1)}h.`;
+        // Filtramos ejercicios que ocurrieron ANTES de la hora de la comida
+        const exercisesBeforeMeal = exercises.filter((ex: any) => {
+            const [h, m] = ex.time.split(':').map(Number);
+            const exTime = new Date(now); 
+            exTime.setHours(h, m, 0, 0);
+            // Comparamos con la fecha del registro, no la actual
+            return exTime.getTime() < now.getTime();
+        });
+
+        if (exercisesBeforeMeal.length > 0) {
+            const last = exercisesBeforeMeal[exercisesBeforeMeal.length - 1];
+            // Calculamos diferencia de horas
+            const [h, m] = last.time.split(':').map(Number);
+            const exTime = new Date(now); exTime.setHours(h, m, 0, 0);
+            const diffHours = (now.getTime() - exTime.getTime()) / 3600000;
+
+            if (diffHours < 3) {
+                exerciseContext = `ALERTA FISIOLÓGICA: El usuario entrenó hace ${diffHours.toFixed(1)}h (${last.intensity}). Necesita recuperación.`;
+            } else {
+                exerciseContext = `Entrenó hace ${diffHours.toFixed(1)}h.`;
+            }
         }
     }
 
-    // 2. Sueño
+    // 2. Contexto de Sueño
     let sleepContext = "Sueño normal.";
     if (settings?.enableSleep && sleep !== null && sleep < 6) {
-        sleepContext = `ALERTA: Durmió mal (${sleep}h). Propenso a ansiedad. Sé estricto con azúcar vacía.`;
+        sleepContext = `ALERTA: Usuario durmió mal (${sleep}h). Propenso a antojos.`;
     }
 
-    // 3. Hora
+    // 3. Hora del registro (Usamos la hora que tú elegiste)
     const hour = now.getHours();
     let timeContext = "Hora normal.";
-    if (hour > 21 || hour < 5) timeContext = "ALERTA: Es muy tarde. Penaliza comidas pesadas.";
+    if (hour > 21 || hour < 5) timeContext = "ALERTA: Es muy tarde/noche. Penaliza comidas pesadas.";
 
-    return `[CONTEXTO VITAL]: ${exerciseContext} | ${sleepContext} | ${timeContext}`;
+    return `
+    [CONTEXTO AL MOMENTO DE COMER (${now.toLocaleTimeString()})]:
+    - ${exerciseContext}
+    - ${sleepContext}
+    - ${timeContext}
+    `;
 };
 
 export const analyzeFridgeImage = async (base64Image: string, mimeType: string) => {
@@ -249,24 +269,28 @@ export const analyzeProductLabel = async (base64Image: string, mimeType: string)
 
 // --- FUNCIONES FALTANTES QUE DASHBOARD NECESITA ---
 
-export const analyzeFoodImpact = async (foodName: string) => {
+export const analyzeFoodImpact = async (foodName: string, customTimestamp?: number) => {
   try {
     const model = getModel();
-    const context = getJudgeContext(); // <--- Aquí lee el contexto
+    // Pasamos la hora al contexto
+    const context = getJudgeContext(customTimestamp); 
 
     const prompt = `
-    Analiza: "${foodName}". Juez Nutricional 80/20.
+    Analiza: "${foodName}". Actúa como Juez Nutricional 80/20.
     ${context}
     
-    INSTRUCCIONES: Ajusta el veredicto según el CONTEXTO VITAL (Ej: Pizza post-entreno es mejor que sedentaria).
-    Responde SOLO JSON: { "isHealthy": boolean, "calories": number, "scoreImpact": number (-50 a +50), "reason": "frase corta basada en contexto" }
+    INSTRUCCIONES:
+    1. Determina si es Saludable (isHealthy) basándote en el alimento Y el momento (Contexto).
+    2. Estima calorías.
+    
+    Responde SOLO JSON: { "isHealthy": boolean, "calories": number, "scoreImpact": number, "reason": "breve explicación" }
     `;
     
     const result = await model.generateContent(prompt);
     const text = result.response.text().replace(/```json|```/g, "").trim(); 
     return JSON.parse(text);
   } catch (e) {
-    return { isHealthy: true, calories: 200, scoreImpact: 10, reason: "Registro manual" };
+    return { isHealthy: true, calories: 200, scoreImpact: 10, reason: "Análisis fallido" };
   }
 };
 
@@ -292,27 +316,22 @@ export const estimateRecipeNutrition = async (t: string, i: string) => {
     return { calories: "0", protein: "0", carbs: "0", fats: "0" };
 };
 
-export const analyzeMealImage = async (base64Image: string, mimeType: string) => {
+export const analyzeMealImage = async (base64Image: string, mimeType: string, customTimestamp?: number) => {
   try {
     const model = getModel(); 
-    // Recuperamos el contexto (asegúrate de tener la función getJudgeContext en este archivo)
-    const context = getJudgeContext(); 
+    const context = getJudgeContext(customTimestamp);
 
     const prompt = `
       Actúa como nutricionista experto. Analiza esta imagen.
       ${context}
       
-      INSTRUCCIONES:
-      1. Identifica el plato.
-      2. Si el usuario durmió mal o entrenó, sé flexible con las calorías.
-      
-      IMPORTANTE: Responde ÚNICAMENTE con el JSON. No escribas "Aquí está el JSON" ni nada extra.
-      Estructura requerida:
+      INSTRUCCIONES: Identifica el plato y juzga si es saludable según el CONTEXTO.
+      RESPONDE SOLO JSON:
       {
         "dishName": "Nombre corto",
         "calories": 0,
-        "isHealthy": true,
-        "description": "Breve descripción"
+        "isHealthy": boolean,
+        "description": "Descripción + Nota de contexto"
       }
     `;
 
@@ -322,25 +341,12 @@ export const analyzeMealImage = async (base64Image: string, mimeType: string) =>
     ]);
 
     const text = result.response.text();
-    
-    // --- SOLUCIÓN BLINDADA ---
-    // Usamos una Expresión Regular para cazar el JSON donde sea que esté
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     
-    if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-    } else {
-        throw new Error("No se encontró JSON válido en la respuesta de la IA");
-    }
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    throw new Error("JSON no encontrado");
 
   } catch (error) {
-    console.error("Error imagen:", error);
-    // Retorno de emergencia para que la app no se trabe
-    return { 
-      dishName: "Plato Detectado (Error)", 
-      calories: 0, 
-      isHealthy: true, 
-      description: "La IA no pudo leer la imagen. Por favor edita los datos manualmente." 
-    };
+    return { dishName: "Plato Detectado", calories: 0, isHealthy: true, description: "Error IA" };
   }
 };
