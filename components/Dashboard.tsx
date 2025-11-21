@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { getDailyBreakdown, getStreaks, updateWater, logMeal, logExercise, getWellnessSettings, logSleep, getTodaySleep, logSteps, getTodaySteps, getHabits, addHabit, deleteHabit, toggleHabitForToday, getTodayHabitLogs } from '../services/storageService';
 import { analyzeFoodImpact, estimateCaloriesBurned } from '../services/geminiService';
-import { DailyBreakdown, Streaks, Intensity, WellnessSettings, Habit } from '../types';
+import { DailyBreakdown, Streaks, Intensity, WellnessSettings, Habit } from '../../types';
 import { motion, useSpring, useTransform, AnimatePresence } from 'framer-motion';
 
 // Helper for counting up numbers
