@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { HistoryItem, MealLog, ExerciseLog } from '../types';
 import { getUnifiedHistory, confirmMeal, deleteItem } from '../services/storageService';
+import { motion, AnimatePresence } from 'framer-motion';
 
 type TabType = 'pending' | 'meals' | 'exercises';
 
@@ -39,16 +40,12 @@ const History: React.FC = () => {
   };
 
   // --- FILTERING LOGIC ---
-  
-  // 1. Pending Meals
   const pendingList = history.filter((m): m is MealLog => m.type === 'meal' && m.status === 'pending');
   
-  // 2. Completed Meals (Diario)
   const mealList = history
     .filter((m): m is MealLog => m.type === 'meal' && m.status === 'completed')
     .sort((a, b) => (b.consumedAt || 0) - (a.consumedAt || 0));
 
-  // 3. Exercises
   const exerciseList = history
     .filter((m): m is ExerciseLog => m.type === 'exercise')
     .sort((a, b) => b.timestamp - a.timestamp);
@@ -57,31 +54,32 @@ const History: React.FC = () => {
     <div className="flex flex-col h-full pb-24 bg-gray-50 min-h-screen">
         {/* 3-TAB NAVIGATION */}
         <div className="bg-white sticky top-[64px] z-30 border-b border-gray-200 flex overflow-x-auto">
-            <button 
-                onClick={() => setActiveTab('pending')}
-                className={`flex-1 min-w-[100px] py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'pending' ? 'border-nutri-green-500 text-nutri-green-700' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-                👨‍🍳 En Cocina
-            </button>
-            <button 
-                onClick={() => setActiveTab('meals')}
-                className={`flex-1 min-w-[100px] py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'meals' ? 'border-nutri-green-500 text-nutri-green-700' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-                🍱 Diario
-            </button>
-            <button 
-                onClick={() => setActiveTab('exercises')}
-                className={`flex-1 min-w-[100px] py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'exercises' ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-            >
-                💪 Ejercicios
-            </button>
+            {['pending', 'meals', 'exercises'].map((tab) => (
+                <button 
+                    key={tab}
+                    onClick={() => setActiveTab(tab as TabType)}
+                    className={`flex-1 min-w-[100px] py-3 text-sm font-bold border-b-2 transition-colors ${
+                        activeTab === tab 
+                        ? (tab === 'exercises' ? 'border-blue-500 text-blue-700' : 'border-nutri-green-500 text-nutri-green-700')
+                        : 'border-transparent text-gray-400 hover:text-gray-600'
+                    }`}
+                >
+                    {tab === 'pending' && '👨‍🍳 En Cocina'}
+                    {tab === 'meals' && '🍱 Diario'}
+                    {tab === 'exercises' && '💪 Ejercicios'}
+                </button>
+            ))}
         </div>
 
         <div className="p-4 space-y-3 flex-1 overflow-y-auto">
-            
+            <AnimatePresence mode="wait">
             {/* TAB 1: PENDING KITCHEN */}
             {activeTab === 'pending' && (
-                <div className="space-y-3 animate-fadeIn">
+                <motion.div 
+                    key="pending"
+                    initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
+                    className="space-y-3"
+                >
                     {pendingList.length === 0 && (
                         <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
                             <p className="text-3xl mb-2">🍳</p>
@@ -89,8 +87,16 @@ const History: React.FC = () => {
                             <p className="text-xs mt-1">Pídele al Chef una receta.</p>
                         </div>
                     )}
+                    <AnimatePresence>
                     {pendingList.map(meal => (
-                        <div key={meal.id} className="bg-white p-4 rounded-xl shadow-sm border border-l-4 border-l-yellow-400 border-gray-100 relative transition-transform active:scale-[0.99]">
+                        <motion.div 
+                            key={meal.id}
+                            layout
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.9 }}
+                            className="bg-white p-4 rounded-xl shadow-sm border border-l-4 border-l-yellow-400 border-gray-100 relative"
+                        >
                             <div className="flex justify-between items-start mb-2">
                                 <h3 className="font-bold text-gray-800 pr-8 line-clamp-2">{meal.title}</h3>
                                 <span className="text-[10px] bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-bold whitespace-nowrap">Pendiente</span>
@@ -111,23 +117,36 @@ const History: React.FC = () => {
                                     ✅ Comer
                                 </button>
                             </div>
-                        </div>
+                        </motion.div>
                     ))}
-                </div>
+                    </AnimatePresence>
+                </motion.div>
             )}
 
             {/* TAB 2: COMPLETED MEALS */}
             {activeTab === 'meals' && (
-                <div className="space-y-3 animate-fadeIn">
+                <motion.div 
+                    key="meals"
+                    initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
+                    className="space-y-3"
+                >
                     {mealList.length === 0 && (
                         <div className="text-center py-10 text-gray-400">
                             <p>No has registrado comidas aún.</p>
                         </div>
                     )}
+                    <AnimatePresence>
                     {mealList.map(meal => {
                         const isNegative = (meal.scoreValue !== undefined && meal.scoreValue < 0);
                         return (
-                            <div key={meal.id} className={`bg-white p-4 rounded-xl shadow-sm border border-l-4 ${isNegative ? 'border-l-red-500' : (meal.isHealthy ? 'border-l-green-500' : 'border-l-orange-500')} border-gray-100 relative`}>
+                            <motion.div 
+                                key={meal.id}
+                                layout
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className={`bg-white p-4 rounded-xl shadow-sm border border-l-4 ${isNegative ? 'border-l-red-500' : (meal.isHealthy ? 'border-l-green-500' : 'border-l-orange-500')} border-gray-100 relative`}
+                            >
                                 <div className="flex justify-between items-start">
                                     <div className="pr-8">
                                         <h3 className="font-bold text-gray-800 line-clamp-2">{meal.title}</h3>
@@ -158,15 +177,20 @@ const History: React.FC = () => {
                                         {meal.calories} kcal
                                     </span>
                                 </div>
-                            </div>
+                            </motion.div>
                         );
                     })}
-                </div>
+                    </AnimatePresence>
+                </motion.div>
             )}
 
             {/* TAB 3: EXERCISES */}
             {activeTab === 'exercises' && (
-                <div className="space-y-3 animate-fadeIn">
+                <motion.div 
+                    key="exercises"
+                    initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
+                    className="space-y-3"
+                >
                     {exerciseList.length === 0 && (
                         <div className="text-center py-10 text-gray-400">
                             <p className="text-3xl mb-2">👟</p>
@@ -174,8 +198,16 @@ const History: React.FC = () => {
                             <p className="text-xs mt-1">¡Muévete un poco hoy!</p>
                         </div>
                     )}
+                    <AnimatePresence>
                     {exerciseList.map(item => (
-                        <div key={item.id} className="bg-blue-50 p-4 rounded-xl shadow-sm border border-l-4 border-l-blue-500 border-blue-100 relative">
+                        <motion.div 
+                            key={item.id}
+                            layout
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.9 }}
+                            className="bg-blue-50 p-4 rounded-xl shadow-sm border border-l-4 border-l-blue-500 border-blue-100 relative"
+                        >
                              <div className="flex justify-between items-start">
                                 <div className="flex items-center gap-3 mb-1">
                                     <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xl shadow-inner">
@@ -202,16 +234,24 @@ const History: React.FC = () => {
                                     ⚡ <span className="font-bold">{item.intensity}</span>
                                 </div>
                             </div>
-                        </div>
+                        </motion.div>
                     ))}
-                </div>
+                    </AnimatePresence>
+                </motion.div>
             )}
+            </AnimatePresence>
         </div>
 
         {/* CONFIRMATION MODAL */}
+        <AnimatePresence>
         {confirmingId && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-fadeIn backdrop-blur-sm">
-                <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl transform transition-all scale-100">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+                <motion.div 
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.8, opacity: 0 }}
+                    className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl"
+                >
                     <h3 className="text-lg font-bold text-gray-800 mb-2">🍽️ ¡Buen provecho!</h3>
                     <p className="text-sm text-gray-600 mb-4">¿Hubo algún cambio en la receta?</p>
                     
@@ -236,9 +276,10 @@ const History: React.FC = () => {
                             Confirmar
                         </button>
                     </div>
-                </div>
+                </motion.div>
             </div>
         )}
+        </AnimatePresence>
     </div>
   );
 };

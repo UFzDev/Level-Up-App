@@ -13,6 +13,7 @@ import Stats from './components/Stats';
 import PointsGuide from './components/PointsGuide';
 import { AppTab } from './types';
 import { initializeGemini } from './services/geminiService';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const App: React.FC = () => {
   const [isApiKeySet, setIsApiKeySet] = useState(false);
@@ -69,7 +70,11 @@ const App: React.FC = () => {
   if (!isApiKeySet) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6">
-        <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-8 border border-gray-100">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }} 
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white w-full max-w-md rounded-2xl shadow-xl p-8 border border-gray-100"
+        >
           <div className="w-16 h-16 bg-nutri-green-500 rounded-full flex items-center justify-center text-white text-3xl mx-auto mb-6 shadow-lg">
             🚀
           </div>
@@ -109,7 +114,7 @@ const App: React.FC = () => {
               </a>
             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
     );
   }
@@ -119,7 +124,17 @@ const App: React.FC = () => {
       <Header />
       
       <main className="max-w-lg mx-auto">
-        {renderContent()}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 10 }}
+            transition={{ duration: 0.2, ease: "easeInOut" }}
+          >
+            {renderContent()}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       <NavBar activeTab={activeTab} onTabChange={setActiveTab} />
