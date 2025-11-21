@@ -328,6 +328,15 @@ const Dashboard: React.FC = () => {
                         Actualizar
                     </button>
                 </div>
+
+                {/* --- NUEVO: CÁLCULO DE CALORÍAS --- */}
+                {stepsCount !== '' && Number(stepsCount) > 0 && (
+                    <p className="text-xs text-cyan-600 font-bold mb-2 text-center bg-cyan-50 p-1 rounded border border-cyan-100">
+                        🔥 Aprox. {Math.round(Number(stepsCount) * 0.04)} kcal quemadas
+                    </p>
+                )}
+                {/* ----------------------------------- */}
+
                 <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                     <motion.div 
                         className="h-full bg-cyan-500"
