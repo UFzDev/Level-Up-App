@@ -1,9 +1,10 @@
 
 import React, { useEffect, useState } from 'react';
 import { getDailyBreakdown, getStreaks, updateWater, logMeal, logExercise, getWellnessSettings, logSleep, getTodaySleep, logSteps, getTodaySteps, getHabits, addHabit, deleteHabit, toggleHabitForToday, getTodayHabitLogs } from '../services/storageService';
-import { analyzeFoodImpact, estimateCaloriesBurned } from '../services/geminiService';
-import { DailyBreakdown, Streaks, Intensity, WellnessSettings, Habit } from '../../types';
+import { analyzeFoodImpact, estimateCaloriesBurned, analyzeMealImage } from '../services/geminiService';
+import { DailyBreakdown, Streaks, Intensity, WellnessSettings, Habit } from '../types';
 import { motion, useSpring, useTransform, AnimatePresence } from 'framer-motion';
+
 
 // Helper for counting up numbers
 const AnimatedNumber = ({ value }: { value: number }) => {
@@ -81,6 +82,19 @@ const CollapsibleCard: React.FC<{
 };
 
 const Dashboard: React.FC = () => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [showMealModal, setShowMealModal] = useState(false);
+  const [isAnalyzingMeal, setIsAnalyzingMeal] = useState(false);
+  
+  // Datos temporales del plato detectado
+  const [detectedMeal, setDetectedMeal] = useState({
+    title: '',
+    calories: 0,
+    isHealthy: true,
+    notes: ''
+  });
+
+
   const [breakdown, setBreakdown] = useState<DailyBreakdown | null>(null);
   const [streaks, setStreaks] = useState<Streaks>({ nutrition: 0, exercise: 0, hydration: 0, habits: 0 });
   const [settings, setSettings] = useState<WellnessSettings | null>(null);
@@ -204,6 +218,66 @@ const Dashboard: React.FC = () => {
   const handleToggleHabit = (id: string) => {
       toggleHabitForToday(id);
       refreshData();
+  };
+
+  // 1. Función al seleccionar una foto
+  // Función al seleccionar una foto
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reiniciamos el input para que puedas subir la misma foto si falló antes
+    e.target.value = '';
+
+    setIsAnalyzingMeal(true);
+    
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    
+    reader.onloadend = async () => {
+      try {
+        const base64data = reader.result as string;
+        const base64Content = base64data.split(',')[1]; 
+        
+        // Llamamos a la IA
+        const result = await analyzeMealImage(base64Content, file.type);
+        
+        // Verificación en consola
+        console.log("Datos recibidos en Dashboard:", result);
+
+        // Guardar datos
+        setDetectedMeal({
+            title: result.dishName || "Comida sin nombre",
+            calories: Number(result.calories) || 0,
+            isHealthy: result.isHealthy !== undefined ? result.isHealthy : true,
+            notes: result.description || ""
+        });
+        
+        // ¡ABRIR MODAL!
+        setShowMealModal(true);
+
+      } catch (error) {
+        console.error(error);
+        alert("Hubo un error procesando la imagen. Intenta de nuevo o ingresa manualmente.");
+      } finally {
+        setIsAnalyzingMeal(false);
+      }
+    };
+  };
+
+  // 2. Función para guardar finalmente
+  const handleConfirmMeal = () => {
+    logMeal(
+        detectedMeal.title, 
+        'completed', 
+        detectedMeal.isHealthy, 
+        detectedMeal.calories, 
+        detectedMeal.notes + " [Escaneado 📸]",
+        detectedMeal.isHealthy ? 100 : -50
+    );
+    setShowMealModal(false);
+    refreshData();
+    alert("✅ Comida registrada.");
   };
 
   if (!breakdown || !settings) return <div className="p-10 text-center">Cargando métricas...</div>;
@@ -389,6 +463,24 @@ const Dashboard: React.FC = () => {
       <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
         <h3 className="font-bold text-gray-800 mb-3 text-sm uppercase">Registro Rápido de Comida</h3>
         <div className="flex gap-2">
+
+            {/* BOTÓN DE CÁMARA */}
+            <input 
+                type="file" 
+                accept="image/*" 
+                className="hidden" 
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+            />
+            <motion.button 
+                whileTap={{ scale: 0.95 }}
+                onClick={() => fileInputRef.current?.click()} 
+                disabled={isAnalyzingMeal}
+                className="bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-bold text-xl disabled:opacity-50"
+            >
+                {isAnalyzingMeal ? '⏳' : '📸'}
+            </motion.button>
+
             <input 
                 className="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-nutri-green-500 outline-none bg-white text-gray-900"
                 placeholder="Ej: 2 tacos de asada"
@@ -465,8 +557,87 @@ const Dashboard: React.FC = () => {
           </motion.div>
       )}
       </AnimatePresence>
+
+        {/* MODAL DE CONFIRMACIÓN DE FOTO */}
+      <AnimatePresence>
+      {showMealModal && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
+          >
+              <motion.div 
+                className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl space-y-4"
+                initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+              >
+                  <h3 className="text-xl font-bold text-gray-800 mb-4">🍽️ Confirmar Plato</h3>
+                  
+                  {/* Campo de Nombre */}
+                  <div className="mb-3">
+                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Plato</label>
+                    <input 
+                        value={detectedMeal.title} 
+                        onChange={e => setDetectedMeal({...detectedMeal, title: e.target.value})}
+                        className="w-full border p-2 rounded text-black font-bold bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none" 
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-3">
+                    {/* Campo de Calorías */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Calorías</label>
+                        <input 
+                            type="number"
+                            value={detectedMeal.calories} 
+                            onChange={e => setDetectedMeal({...detectedMeal, calories: Number(e.target.value)})}
+                            className="w-full border p-2 rounded text-black bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none" 
+                        />
+                    </div>
+                    
+                    {/* VEREDICTO DE IA (SOLO LECTURA) */}
+                    <div className="flex flex-col justify-end">
+                        <div className={`w-full px-2 py-2 rounded-lg border text-center text-[10px] font-bold uppercase tracking-wider flex items-center justify-center h-[42px] ${
+                            detectedMeal.isHealthy 
+                            ? 'bg-green-50 border-green-200 text-green-700' 
+                            : 'bg-orange-50 border-orange-200 text-orange-700'
+                        }`}>
+                            {detectedMeal.isHealthy ? '✅ Saludable' : '⚠️ Antojo'}
+                        </div>
+                        <p className="text-[9px] text-gray-400 text-center mt-1">
+                            Juez IA (No editable)
+                        </p>
+                    </div>
+                  </div>
+
+                  {/* Campo de Descripción */}
+                  <div className="mb-4">
+                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Descripción</label>
+                    <textarea 
+                        value={detectedMeal.notes} 
+                        onChange={e => setDetectedMeal({...detectedMeal, notes: e.target.value})}
+                        className="w-full border p-2 rounded text-black text-sm h-20 bg-gray-50 focus:ring-2 focus:ring-nutri-green-500 outline-none resize-none" 
+                    />
+                  </div>
+
+                  {/* Botones de Acción */}
+                  <div className="flex gap-3 pt-2">
+                      <button 
+                        onClick={() => setShowMealModal(false)} 
+                        className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button 
+                        onClick={handleConfirmMeal} 
+                        className="flex-1 py-3 bg-nutri-green-600 text-white rounded-xl font-bold shadow-lg hover:bg-nutri-green-700 transition-colors"
+                      >
+                        Guardar
+                      </button>
+                  </div>
+              </motion.div>
+          </motion.div>
+      )}
+      </AnimatePresence>
     </div>
-  );
-};
+)};
 
 export default Dashboard;

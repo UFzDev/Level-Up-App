@@ -4,7 +4,7 @@
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 // Asumo que tienes un archivo types.ts que define estos modelos de datos
 import { UserRecipe } from "../types"; 
-import { getUnifiedHistory, getTodayExercises } from "./storageService";
+import { getUnifiedHistory, getTodayExercises, getLastNightSleepHours, getWellnessSettings } from "./storageService";
 
 // ========================================================================
 // 1. GESTIÓN DE CLIENTE (Multi-Usuario)
@@ -189,6 +189,42 @@ export const chatWithChef = async (
 
 // --- EL RESTO DE FUNCIONES SE AJUSTAN IGUAL ---
 
+// --- HELPER: Contexto para Jueces ---
+const getJudgeContext = () => {
+    const sleep = getLastNightSleepHours();
+    const exercises = getTodayExercises();
+    const settings = getWellnessSettings();
+    const now = new Date();
+    
+    // 1. Ejercicio Reciente
+    let exerciseContext = "Sedentario hoy.";
+    if (exercises.length > 0) {
+        const last = exercises[exercises.length - 1];
+        const [h, m] = last.time.split(':').map(Number);
+        const exTime = new Date(); exTime.setHours(h, m, 0, 0);
+        const diffHours = (now.getTime() - exTime.getTime()) / 3600000;
+        
+        if (diffHours < 3) {
+            exerciseContext = `ALERTA: Entrenó hace ${diffHours.toFixed(1)}h (${last.intensity}). Necesita recuperación. Sé flexible con calorías nutritivas.`;
+        } else {
+            exerciseContext = `Hizo ejercicio hace ${diffHours.toFixed(1)}h.`;
+        }
+    }
+
+    // 2. Sueño
+    let sleepContext = "Sueño normal.";
+    if (settings?.enableSleep && sleep !== null && sleep < 6) {
+        sleepContext = `ALERTA: Durmió mal (${sleep}h). Propenso a ansiedad. Sé estricto con azúcar vacía.`;
+    }
+
+    // 3. Hora
+    const hour = now.getHours();
+    let timeContext = "Hora normal.";
+    if (hour > 21 || hour < 5) timeContext = "ALERTA: Es muy tarde. Penaliza comidas pesadas.";
+
+    return `[CONTEXTO VITAL]: ${exerciseContext} | ${sleepContext} | ${timeContext}`;
+};
+
 export const analyzeFridgeImage = async (base64Image: string, mimeType: string) => {
   try {
     const model = getModel(); // Usando el modelo inicializado
@@ -216,16 +252,21 @@ export const analyzeProductLabel = async (base64Image: string, mimeType: string)
 export const analyzeFoodImpact = async (foodName: string) => {
   try {
     const model = getModel();
-    // Prompt forzando JSON
-    const prompt = `Analiza: "${foodName}". Actúa como Juez.
-    Responde SOLO este JSON sin texto extra:
-    { "isHealthy": boolean, "calories": number, "scoreImpact": number, "reason": "frase corta" }`;
+    const context = getJudgeContext(); // <--- Aquí lee el contexto
+
+    const prompt = `
+    Analiza: "${foodName}". Juez Nutricional 80/20.
+    ${context}
+    
+    INSTRUCCIONES: Ajusta el veredicto según el CONTEXTO VITAL (Ej: Pizza post-entreno es mejor que sedentaria).
+    Responde SOLO JSON: { "isHealthy": boolean, "calories": number, "scoreImpact": number (-50 a +50), "reason": "frase corta basada en contexto" }
+    `;
     
     const result = await model.generateContent(prompt);
     const text = result.response.text().replace(/```json|```/g, "").trim(); 
     return JSON.parse(text);
   } catch (e) {
-    return { isHealthy: true, calories: 200, scoreImpact: 10, reason: "Error de conexión" };
+    return { isHealthy: true, calories: 200, scoreImpact: 10, reason: "Registro manual" };
   }
 };
 
@@ -249,4 +290,57 @@ export const searchNutritionInfo = async (query: string) => {
 
 export const estimateRecipeNutrition = async (t: string, i: string) => {
     return { calories: "0", protein: "0", carbs: "0", fats: "0" };
+};
+
+export const analyzeMealImage = async (base64Image: string, mimeType: string) => {
+  try {
+    const model = getModel(); 
+    // Recuperamos el contexto (asegúrate de tener la función getJudgeContext en este archivo)
+    const context = getJudgeContext(); 
+
+    const prompt = `
+      Actúa como nutricionista experto. Analiza esta imagen.
+      ${context}
+      
+      INSTRUCCIONES:
+      1. Identifica el plato.
+      2. Si el usuario durmió mal o entrenó, sé flexible con las calorías.
+      
+      IMPORTANTE: Responde ÚNICAMENTE con el JSON. No escribas "Aquí está el JSON" ni nada extra.
+      Estructura requerida:
+      {
+        "dishName": "Nombre corto",
+        "calories": 0,
+        "isHealthy": true,
+        "description": "Breve descripción"
+      }
+    `;
+
+    const result = await model.generateContent([
+      { inlineData: { mimeType, data: base64Image } },
+      prompt
+    ]);
+
+    const text = result.response.text();
+    
+    // --- SOLUCIÓN BLINDADA ---
+    // Usamos una Expresión Regular para cazar el JSON donde sea que esté
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    
+    if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+    } else {
+        throw new Error("No se encontró JSON válido en la respuesta de la IA");
+    }
+
+  } catch (error) {
+    console.error("Error imagen:", error);
+    // Retorno de emergencia para que la app no se trabe
+    return { 
+      dishName: "Plato Detectado (Error)", 
+      calories: 0, 
+      isHealthy: true, 
+      description: "La IA no pudo leer la imagen. Por favor edita los datos manualmente." 
+    };
+  }
 };
