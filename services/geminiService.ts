@@ -4,7 +4,7 @@
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 // Asumo que tienes un archivo types.ts que define estos modelos de datos
 import { UserRecipe } from "../types"; 
-import { getUnifiedHistory, getTodayExercises, getLastNightSleepHours, getWellnessSettings } from "./storageService";
+import { getUnifiedHistory, getTodayExercises, getLastNightSleepHours, getWellnessSettings, getWaterData } from "./storageService";
 
 // ========================================================================
 // 1. GESTIÓN DE CLIENTE (Multi-Usuario)
@@ -20,20 +20,19 @@ export const initializeGemini = (apiKey: string) => {
 
 // 1.2. Función auxiliar para obtener el modelo (usada por todas las demás funciones)
 const getModel = () => {
-  // Si no está inicializado, intentamos recuperarlo del localStorage automáticamente
+  // 1. Si la instancia se borró (por recarga), intentamos recuperarla
   if (!genAIInstance) {
-    const storedKey = localStorage.getItem('user_api_key');
+    const storedKey = localStorage.getItem('user_api_key'); // Busca la llave guardada
+    
     if (storedKey) {
-      // ¡Auto-recuperación! 🚑
       genAIInstance = new GoogleGenerativeAI(storedKey);
-      console.log("🔄 Gemini recuperado automáticamente desde almacenamiento.");
+      console.log("🔄 Conexión con Gemini recuperada silenciosamente.");
     } else {
-      // Si de verdad no hay llave, entonces sí lanzamos el error
-      throw new Error("Gemini Client no inicializado. Clave no disponible.");
+      // 2. Solo si NO hay llave guardada, lanzamos el error
+      throw new Error("Gemini no está inicializado. Por favor ingresa tu API Key en la pantalla de inicio o menú.");
     }
   }
   
-  // Ahora sí, regresamos el modelo
   return genAIInstance.getGenerativeModel({ model: MODEL_NAME });
 };
 
@@ -53,6 +52,57 @@ export const generateDailyPlan = async (): Promise<string> => {
   }
 };
 
+// --- NUEVA FUNCIÓN HELPER (Pégala antes de chatWithChef) ---
+const getGlobalContext = () => {
+    const sleep = getLastNightSleepHours();
+    const settings = getWellnessSettings();
+    const exercises = getTodayExercises();
+    const water = getWaterData(); // <--- Leemos tu agua actual
+    const now = new Date();
+    
+    // 1. Contexto de Ejercicio
+    let exerciseContext = "Actividad hoy: Sedentario/Bajo.";
+    if (exercises.length > 0) {
+        const last = exercises[exercises.length - 1];
+        const [h, m] = last.time.split(':').map(Number);
+        const exTime = new Date(now); exTime.setHours(h, m, 0, 0);
+        const diffHours = (now.getTime() - exTime.getTime()) / 3600000;
+        
+        if (diffHours < 4) {
+            exerciseContext = `🔥 ALERTA ENTRENAMIENTO: Entrenó hace ${diffHours.toFixed(1)}h (${last.intensity}). El cuerpo pide recuperación.`;
+        } else {
+            exerciseContext = `Entrenó hace ${diffHours.toFixed(1)}h.`;
+        }
+    }
+
+    // 2. Contexto de Sueño
+    let sleepContext = "Descanso: Normal.";
+    if (settings?.enableSleep && sleep !== null) {
+        sleepContext = sleep < 6 
+            ? `⚠️ ALERTA SUEÑO: Durmió mal (${sleep}h). Cansancio acumulado.` 
+            : `✅ SUEÑO: Descanso óptimo (${sleep}h).`;
+    }
+
+    // 3. Contexto de Hidratación (NUEVO)
+    let waterContext = `Hidratación: ${water.count} vasos.`;
+    const hour = now.getHours();
+    if (hour >= 12 && water.count < 2) waterContext += " 🚨 ALERTA: Muy deshidratado para esta hora.";
+    else if (hour >= 18 && water.count < 5) waterContext += " ⚠️ ALERTA: Bajo consumo de agua en el día.";
+    else if (water.count >= 8) waterContext += " 🏆 Meta de agua cumplida.";
+
+    // 4. Hora del día
+    let timeContext = "Hora: Normal.";
+    if (hour > 21 || hour < 5) timeContext = "⚠️ ALERTA: Es muy tarde/noche. Metabolismo lento.";
+
+    return `
+    [CONSTANTES VITALES]:
+    - ${exerciseContext}
+    - ${sleepContext}
+    - ${waterContext}
+    - ${timeContext}
+    `;
+};
+
 export const chatWithChef = async (
   history: { role: string; parts: { text: string }[] }[], 
   message: string,
@@ -60,107 +110,111 @@ export const chatWithChef = async (
 ) => {
   try {
     const model = getModel();
-    // 1. Extraemos TODOS los datos (incluyendo los nuevos de Bienestar)
+    // 1. Desempaquetamos TODOS los datos
     const { pantry, recipes, score, streak, lastNightSleepHours, wellnessSettings } = contextData;
 
-    // --- LÓGICA DE TIEMPO Y FASES NUTRICIONALES (TUYA, CONSERVADA) ---
+    // --- A. LÓGICA DE TIEMPO Y FASES (La agresiva que sí funciona) ---
     const currentTime = new Date();
     const currentHour = currentTime.getHours();
     const timeOfDay = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-    const todayStart = new Date(currentTime.setHours(0, 0, 0, 0)).getTime();
-
-    const allUnifiedHistory = getUnifiedHistory(); 
     
-    // Filtramos comidas completadas HOY usando consumedAt si existe, o timestamp
-    const todayCompletedMeals = allUnifiedHistory.filter((item: any) => {
-        const t = item.consumedAt || item.timestamp;
-        return item.type === 'meal' && item.status === 'completed' && t >= todayStart;
-    });
-
-    let mealContext = "Fase Nutricional: ";
-    let missingMealPrompt = "";
-    
-    // Chequeo de comidas (Mejorado para usar timestamp real)
-    const hasBreakfast = todayCompletedMeals.some((m: any) => new Date(m.consumedAt || m.timestamp).getHours() < 12);
-    const hasLunch = todayCompletedMeals.some((m: any) => {
-        const h = new Date(m.consumedAt || m.timestamp).getHours();
-        return h >= 12 && h < 18;
-    });
-    const hasDinner = todayCompletedMeals.some((m: any) => new Date(m.consumedAt || m.timestamp).getHours() >= 18);
-
-    // Tu lógica de horarios intacta
-    if (currentHour >= 5 && currentHour < 12) {
-        mealContext += "MAÑANA (Desayuno).";
-        if (!hasBreakfast && currentHour >= 8) missingMealPrompt = "⚠️ INSTRUCCIÓN: No ha desayunado. Prioriza sugerir desayuno energético.";
-        else if (hasBreakfast && currentHour >= 11) missingMealPrompt = "Ya desayunó. Sugiere snack ligero.";
-    } else if (currentHour >= 12 && currentHour < 18) { // Ajusté a 18 para cubrir tarde
-        mealContext += "MEDIODÍA (Comida).";
-        if (!hasLunch && currentHour >= 14) missingMealPrompt = "⚠️ INSTRUCCIÓN: No ha comido. Prioriza sugerir plato fuerte.";
-        else if (hasLunch) missingMealPrompt = "Ya comió. Sugiere snack o té.";
-    } else if (currentHour >= 18 && currentHour < 22) {
-        mealContext += "NOCHE (Cena).";
-        if (!hasDinner && currentHour >= 20) missingMealPrompt = "⚠️ INSTRUCCIÓN: No ha cenado. Sugiere cena ligera con proteína.";
-        else if (hasDinner) missingMealPrompt = "Ya cenó. Felicita y sugiere descanso.";
-    } else {
-        mealContext += "MADRUGADA/DESCANSO.";
-        missingMealPrompt = "Promueve solo hidratación o descanso.";
-    }
+    // Lógica rápida de fase del día
+    let mealContext = "Madrugada";
+    if (currentHour >= 5 && currentHour < 12) mealContext = "MAÑANA (Desayuno)";
+    else if (currentHour >= 12 && currentHour < 18) mealContext = "MEDIODÍA (Comida)";
+    else if (currentHour >= 18 && currentHour < 22) mealContext = "NOCHE (Cena)";
+    else mealContext = "HORA DE DORMIR";
 
     const timeContextPrompt = `
-    [CONTEXTO TEMPORAL]:
-    - HORA: ${timeOfDay} | FASE: ${mealContext}
-    - ${missingMealPrompt}
+    [RELOJ Y TIEMPO REAL (DATO MAESTRO)]:
+    - HORA ACTUAL: ${timeOfDay}
+    - FASE: ${mealContext}
+    IMPORTANTE: SÍ tienes reloj. Úsalo para sugerir comidas apropiadas a la hora.
     `;
 
-    // --- NUEVO: LÓGICA DE SUEÑO (INYECTADA) ---
-    let sleepContext = "";
-    if (wellnessSettings?.enableSleep) {
-        if (lastNightSleepHours !== null) {
-            if (lastNightSleepHours < 6) {
-                sleepContext = `⚠️ ALERTA BIENESTAR: El usuario durmió solo ${lastNightSleepHours}h. Está cansado. SUGERIR: Energía sostenida, evitar comidas pesadas.`;
-            } else {
-                sleepContext = `✅ BIENESTAR: Sueño recuperador (${lastNightSleepHours}h).`;
-            }
-        }
-    }
+    // --- B. LÓGICA DE HISTORIAL (48H + SEMANAL) ---
+    const now = Date.now();
+    const twoDaysAgo = now - (48 * 60 * 60 * 1000);
+    const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+    const allUnifiedHistory = getUnifiedHistory(); 
 
-    // --- LÓGICA DE 48 HORAS (MEJORADA) ---
-    const twoDaysAgo = Date.now() - (48 * 60 * 60 * 1000);
+    // 1. Memoria Inmediata (48h)
     const recentItems = allUnifiedHistory.filter((item: any) => {
         const t = item.consumedAt || item.timestamp;
         return t > twoDaysAgo;
     });
-
-    const calculatedHistoryString = recentItems.length > 0 
+    const history48h = recentItems.length > 0 
         ? recentItems.map((h: any) => {
             const t = h.consumedAt || h.timestamp;
-            const dateStr = new Date(t).toLocaleDateString('es-ES', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-            if (h.type === 'exercise') return `- [EJERCICIO ${dateStr}] 🏃 ${h.name} (${h.duration}min, ${h.caloriesBurned}kcal)`;
-            return `- [COMIDA ${dateStr}] ${h.title} (${h.calories} kcal)`;
+            const dateStr = new Date(t).toLocaleDateString('es-ES', { weekday: 'short', hour: '2-digit' });
+            return `- ${h.title || h.name} (${h.calories || h.caloriesBurned} kcal)`;
         }).join('\n')
         : "Sin actividad reciente.";
 
-    // --- SYSTEM PROMPT FINAL ---
-    const systemText = `
-    Eres 'Level Up Coach', experto en nutrición y fitness.
-    
-    [DATOS JUGADOR]: Score ${score} | Racha ${streak}.
-    ${sleepContext}
+    // 2. Memoria Semanal (Patrones)
+    const weeklyItems = allUnifiedHistory.filter((item: any) => {
+        const t = item.consumedAt || item.timestamp;
+        return t > sevenDaysAgo && t <= twoDaysAgo; // Lo que pasó antes de las 48h
+    });
+    const historyWeekly = weeklyItems.length > 0
+        ? weeklyItems.map((h: any) => h.title || h.name).join(', ')
+        : "Sin registros antiguos.";
 
+    // --- C. LÓGICA DE BIENESTAR (Sueño) ---
+    let sleepContext = "";
+    if (wellnessSettings?.enableSleep) {
+        if (lastNightSleepHours !== null) {
+            sleepContext = lastNightSleepHours < 6 
+                ? `⚠️ ALERTA: Durmió mal (${lastNightSleepHours}h).` 
+                : `✅ Descanso: Bien (${lastNightSleepHours}h).`;
+        }
+    }
+
+    // --- D. SYSTEM PROMPT FINAL (CON TODO INTEGRADO) ---
+    const systemText = `
+    Eres 'Level Up Coach', consultor experto en salud y nutrición 80/20.
+    
     ${timeContextPrompt}
 
-    [HISTORIAL RECIENTE 48H]:
-    ${calculatedHistoryString}
+    [ESTADO DEL USUARIO]:
+    - Score: ${score} | Racha: ${streak}.
+    - ${sleepContext}
 
-    [INVENTARIO]: ${pantry.join(', ')}.
+    [MEMORIA INMEDIATA (Últimas 48h - Balance Químico)]:
+    ${history48h}
 
-    [REGLAS]:
+    [PATRONES SEMANALES (Contexto General)]:
+    ${historyWeekly}
+
+    [INVENTARIO DISPONIBLE]:
+    ${pantry.join(', ')}.
+
+    [REGLAS ABSOLUTAS]:
+    1. **LA LISTA DE [MEMORIA INMEDIATA] ES TU ÚNICA FUENTE DE VERDAD.**
+    2. Si en el chat anterior confirmamos una comida, pero YA NO aparece en [MEMORIA INMEDIATA], significa que el usuario la BORRÓ. **Haz de cuenta que nunca existió.**
+    3. Si el usuario te pregunta "¿Qué he comido?", lee SOLO la lista de [MEMORIA INMEDIATA]. No inventes ni recuerdes cosas viejas del chat.
+    [OTRAS REGLAS]
     1. Sé breve y motivador.
-    2. Si sugieres receta, verifica ingredientes.
-    3. Si das una receta completa, INCLUYE SIEMPRE este JSON al final:
-    \`\`\`json
-    { "type": "recipe_card", "title": "Nombre", "time": "15m", "ingredients": [], "instructions": [], "macros": {"calories": "0", "protein": "0", "carbs": "0", "fats": "0"} }
-    \`\`\`
+    2. Usa el contexto para personalizar tu respuesta.
+    3. **PROTOCOLO DE RECETAS (CRÍTICO):**
+       SIEMPRE que sugieras una comida específica o des instrucciones de preparación, ES OBLIGATORIO incluir al final el bloque de código JSON para que la app genere la tarjeta interactiva.
+       
+       Si no incluyes el JSON, el usuario no podrá guardar su comida.
+       
+       Usa ESTRICTAMENTE este formato al final de tu respuesta:
+       \`\`\`json
+       { 
+         "type": "recipe_card", 
+         "title": "Título del Plato", 
+         "time": "XX min", 
+         "ingredients": ["Ingrediente 1", "Ingrediente 2"], 
+         "instructions": ["Paso 1", "Paso 2"], 
+         "isHealthy": true, 
+         "scoreImpact": 100, 
+         "healthTag": "Etiqueta (ej: Proteína Pura)", 
+         "macros": {"calories": "0", "protein": "0", "carbs": "0", "fats": "0"} 
+       }
+       \`\`\`
     `;
 
     // --- Limpieza y Envío ---
@@ -272,25 +326,23 @@ export const analyzeProductLabel = async (base64Image: string, mimeType: string)
 export const analyzeFoodImpact = async (foodName: string, customTimestamp?: number) => {
   try {
     const model = getModel();
-    // Pasamos la hora al contexto
-    const context = getJudgeContext(customTimestamp); 
+    // Aquí le pasamos el contexto vital al Juez
+    const context = getGlobalContext(); 
 
     const prompt = `
     Analiza: "${foodName}". Actúa como Juez Nutricional 80/20.
     ${context}
     
     INSTRUCCIONES:
-    1. Determina si es Saludable (isHealthy) basándote en el alimento Y el momento (Contexto).
-    2. Estima calorías.
-    
-    Responde SOLO JSON: { "isHealthy": boolean, "calories": number, "scoreImpact": number, "reason": "breve explicación" }
+    1. Ajusta veredicto según CONTEXTO VITAL. (Ej: Pizza post-entreno es mejor que pizza sedentaria).
+    2. Responde SOLO JSON: { "isHealthy": boolean, "calories": number, "scoreImpact": number (-50 a +100), "reason": "frase corta" }
     `;
     
     const result = await model.generateContent(prompt);
     const text = result.response.text().replace(/```json|```/g, "").trim(); 
     return JSON.parse(text);
   } catch (e) {
-    return { isHealthy: true, calories: 200, scoreImpact: 10, reason: "Análisis fallido" };
+    return { isHealthy: true, calories: 200, scoreImpact: 10, reason: "Registro manual" };
   }
 };
 
@@ -316,23 +368,16 @@ export const estimateRecipeNutrition = async (t: string, i: string) => {
     return { calories: "0", protein: "0", carbs: "0", fats: "0" };
 };
 
-export const analyzeMealImage = async (base64Image: string, mimeType: string, customTimestamp?: number) => {
+export const analyzeMealImage = async (base64Image: string, mimeType: string) => {
   try {
     const model = getModel(); 
-    const context = getJudgeContext(customTimestamp);
+    const context = getGlobalContext(); // Contexto vital para la foto también
 
     const prompt = `
-      Actúa como nutricionista experto. Analiza esta imagen.
+      Actúa como Juez Nutricional. Analiza imagen.
       ${context}
-      
-      INSTRUCCIONES: Identifica el plato y juzga si es saludable según el CONTEXTO.
       RESPONDE SOLO JSON:
-      {
-        "dishName": "Nombre corto",
-        "calories": 0,
-        "isHealthy": boolean,
-        "description": "Descripción + Nota de contexto"
-      }
+      { "dishName": "Nombre", "calories": 0, "isHealthy": boolean, "description": "Descripción + Contexto" }
     `;
 
     const result = await model.generateContent([
@@ -342,9 +387,9 @@ export const analyzeMealImage = async (base64Image: string, mimeType: string, cu
 
     const text = result.response.text();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
-    throw new Error("JSON no encontrado");
+    throw new Error("No JSON");
 
   } catch (error) {
     return { dishName: "Plato Detectado", calories: 0, isHealthy: true, description: "Error IA" };

@@ -90,7 +90,10 @@ export interface StructuredRecipe {
     carbs: string;
     fats: string;
   };
-  missingIngredients?: string[]; // For "Compra Rápida"
+  // --- CAMPOS NUEVOS PARA AUTOCRÍTICA ---
+  isHealthy: boolean;      // ¿Es realmente saludable?
+  scoreImpact: number;     // ¿Cuántos puntos merece? (ej: 50, 100, -50)
+  healthTag: string;       // Etiqueta (ej: "⚠️ Falta Fibra" o "✅ Balanceado")
 }
 
 export interface VisionResult {

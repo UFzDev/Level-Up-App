@@ -16,6 +16,14 @@ const RecipeCard: React.FC<{ data: StructuredRecipe, onCook: () => void }> = ({ 
         <span className="text-xs font-medium bg-white px-2 py-1 rounded-full text-gray-600 border">⏱️ {data.time}</span>
       </div>
       
+      <div className={`w-full py-1 text-[10px] font-black uppercase tracking-widest text-center border-b ${
+          (data.scoreImpact || 0) > 0 
+          ? 'bg-green-100 text-green-700 border-green-200' // Si da puntos positivos
+          : 'bg-orange-100 text-orange-700 border-orange-200' // Si quita puntos o da 0
+      }`}>
+          {data.healthTag || "Receta Chef"} ({data.scoreImpact > 0 ? '+' : ''}{data.scoreImpact} XP)
+      </div>
+
       <div className="p-4 space-y-3">
         <div>
           <p className="text-xs font-bold text-gray-500 uppercase mb-1">Ingredientes</p>
@@ -179,14 +187,25 @@ const Chatbot: React.FC = () => {
   };
 
   const handleCook = (recipe: StructuredRecipe) => {
-    // Extract numeric calories from string "350 kcal" -> 350
+
     const calString = recipe.macros.calories || "400";
     const calNumber = parseInt(calString.replace(/\D/g, '')) || 400;
     
-    // Save as PENDING
-    logMeal(recipe.title, 'pending', true, calNumber, '');
+    // AHORA USAMOS EL JUICIO DEL CHEF, NO ASUMIMOS QUE ES BUENO
+    const isHealthy = recipe.isHealthy !== undefined ? recipe.isHealthy : true; // Fallback a true si falla
+    const score = recipe.scoreImpact !== undefined ? recipe.scoreImpact : 100;
+    const tag = recipe.healthTag || "Receta Chef";
+
+    logMeal(
+        recipe.title, 
+        'pending', 
+        isHealthy, // <--- Ya no es 'true' fijo
+        calNumber, 
+        `[Chef] ${tag}`, // Agregamos la etiqueta a las notas
+        score // <--- Usamos el puntaje que decidió el Chef (ej: 50 o 100)
+    );
     
-    alert("✅ Receta enviada a 'En Cocina'. ¡Ve a la pestaña Historial cuando la termines!");
+    alert(`✅ Receta guardada en Pendientes.\nCalificación: ${tag} (${score} XP)`);
   };
 
   return (
